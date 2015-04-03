@@ -3,20 +3,10 @@
   (:import [UnityEngine Color Vector3 GameObject Color]))
 
 
-;TODO
-;[ ] deftween fn for +'ing target and value for relative target
-;[ ] link! protocol for adding callbacks
-;[ ] callback should handle sequences
-;[ ] delay functionality (in link! ?)
-;[ ] tweens should call finish with remainder float, if a callback is a tween add remainder to start time
-;[x] when recycling tween comp or destroying, make sure uid is dissoc'd from REGISTRY
-
-(defn -V+ [^Vector3 a ^Vector3 b] (Vector3/op_Addition a b))
-
+(defn- -V+ [^Vector3 a ^Vector3 b] (Vector3/op_Addition a b))
 
 (def ^:private UID (atom 0))
 (def REGISTRY (atom {}))
-(def PROP-GETS (atom {}))
 
 (defn finish [uid c]
   (when-let [f (get @REGISTRY uid)]
@@ -33,6 +23,19 @@
   :inout (fn [fin fout r]
           (cond (< r 0.5) (/ (fin (* 2 r)) 2)
                   :else (- 1 (/ (fout (* 2 (- 1 r))) 2))))})
+
+(def ^:private easeregistry
+  (into {}
+  (for [in [nil :pow2 :pow3 :pow4 :pow5]
+      out [nil :pow2 :pow3 :pow4 :pow5]
+      :let [infn (get easing in) 
+            outfn (get easing out)]]
+      (cond (= [in out] [nil nil]) {[in out] #(identity %)}
+        (= out nil) {[in out] (fn [r] ((:in easing) infn r))}
+        (= in nil) {[in out] #((:out easing) outfn %)}
+        :else {[in out] #((:inout easing) infn outfn %)}
+
+        ))))
 
 
 (deftype Tween [^System.MonoType component opts callbacks]
@@ -62,41 +65,33 @@
   clojure.lang.IFn
   (invoke [this go] 
     (let [pre-c (.GetComponent go component) 
-        c (or pre-c (.AddComponent go component))
-        uid (int (swap! UID inc))]
+        c (or pre-c (.AddComponent go component))]
       (set! (.active c) true)
       (set! (.value c) (.target c))
       (if pre-c 
-        (do (swap! REGISTRY dissoc (.uid c))
-            (set! (.value c) (.target c)))
-        (set! (.value c)  ((.getfn c) go)))
-      (when @callbacks
-        (swap! REGISTRY conj {uid @callbacks}))
-      (set! (.uid c) uid)
-      (set! (.start c) (float (UnityEngine.Time/time)))
-      (set! (.duration c) (float (:duration opts)))
+        (do (set! (.value c) (.target c)))
+        (do (set! (.value c)  ((.getfn c) go))
+             ))
+      (set! (.uid c) (int (swap! UID inc)))
+      (if @callbacks
+        (swap! REGISTRY conj {(.uid c) @callbacks})
+        (swap! REGISTRY dissoc (.uid c)))
       
-      
+      (set! (.start c) (- (+ (UnityEngine.Time/time) (:delay opts)) (.delay c)))
+      (set! (.duration c) (:duration opts))
+      (set! (.delay c) 0.0)
+
       (if (:+ opts) 
         (do ;(set! (.relative c) true)
             (set! (.target c) ((.addfn c) (.value c) (:target opts))))
         (set! (.target c) (:target opts)))
       (when-not (= (.easesig c) [(:in opts) (:out opts)]) 
-        (set! (.easesig c) [(:in opts)(:out opts) ])
-        (cond 
-          (and (:in opts) (:out opts)) 
-            (set! (.easefn c) #((:inout easing) (get easing (:in opts)) (get easing (:out opts)) %))
-          (:in opts) 
-            (set! (.easefn c) #((:in easing) (get easing (:in opts) ) %))
-          (:out opts) 
-            (set! (.easefn c) #((:out easing) (get easing (:out opts)) %))
-          :else 
-            (set! (.easefn c) (fn [r] r))))
-      )
-      go))
+        (set! (.easesig c) [(:in opts) (:out opts)])
+        (set! (.easefn c) (get easeregistry [(:in opts)(:out opts) ])))
+      go)))
 
 (defn make [c target & more]
-  (let [args (conj {:target target :duration 1.0 :+ false :callback nil}
+  (let [args (conj {:target target :duration 1.0 :+ false :callback nil :delay 0.0}
         (into {} (mapv 
           #(cond 
             (= :+ %) {:+ true}
@@ -130,48 +125,49 @@
 (defmacro deftween [sym props & methods ] ;getter valuer & setter
   (let [{:keys [getter valuer setter adder]} (conj default-methods (into {} (map sort-methods methods)))
         compsym (symbol (str sym "_tween"))
-        res-props (concat '[^boolean active ^float delay ^float start ^float duration ^boolean relative ^float ratio ^int uid
+        res-props (concat '[^boolean active ^System.Double delay ^System.Double start ^System.Double duration ^boolean relative ^float ratio ^int uid
                            getfn addfn easefn easesig] props)
         [[this] get-more] getter
         [[this-v] value-more] valuer
         getterfn (cons 'fn getter)
         set-more (or setter (list 'set! get-more value-more))]
-  `(~'do
-    (~'swap! ~'tween.core/PROP-GETS ~'conj {(~'str (~'quote ~compsym)) (~'fn [~this] ~get-more)})
-    (~'arcadia.core/defcomponent ~compsym ~res-props
-     (~'Awake [~this]
-      ('~use '~'hard.core)
-        (~'set! (~'.getfn ~this) ~getterfn)
-        (~'set! (~'.addfn ~this) ~adder)
-        (~'set! (~'.duration ~this) (float 5.0))
-        (~'set! (~'.start ~this) (~'UnityEngine.Time/time))
-        (~'set! (~'.value ~this) ~get-more)
-        (~'set! (~'.target ~this) ~get-more))
-     (~'Update [~this-v]
-        (~'if (~'.active ~this-v)
+`(do
 
-          (~'if  (~'> (~'- (~'UnityEngine.Time/time) (~'.start ~this-v)) (~'.duration ~this-v))
-              (~'do 
-                (~'set! (~'.ratio ~this-v) ~'(float 1.0))
+  (arcadia.core/defcomponent ~compsym ~res-props
+   (~'Awake [~this]
+      (set! (.getfn ~this) ~getterfn)
+      (set! (.addfn ~this) ~adder)
+      (set! (.duration ~this) 5.0)
+      (set! (.start ~this) (UnityEngine.Time/time))
+      (set! (.value ~this) ~get-more)
+      (set! (.target ~this) ~get-more))
+   (~'Update [~this-v]
+
+      (if (.active ~this-v)
+            (if  (> (- (UnityEngine.Time/time) (.start ~this-v)) 
+                    (.duration ~this-v))
+
+              (do (set! (.ratio ~this-v) (float 1.0))
                 ~set-more
-                (~'set! (~'.active ~this-v) ~'false)
-                (~'tween.core/finish (~'.uid ~this-v) (~'.gameObject ~this-v))
-                (~'set! (~'.delay ~this-v) (~'float (~'- (~'.delay ~this-v) (~'- (~'- (~'UnityEngine.Time/time) (~'.start ~this-v)) (~'.duration ~this-v))))))
+                (set! (.active ~this-v) false)
+                (set! (.delay ~this-v) 
+                  (- (- (UnityEngine.Time/time) (.start ~this-v)) 
+                     (.duration ~this-v)))
+                (tween.core/finish (.uid ~this-v) (.gameObject ~this-v)))
               
-          (~'do
-                (~'set! (~'.ratio ~this-v) 
-                  (~'float ((~'.easefn ~this)
-                   (~'/ (~'- (~'UnityEngine.Time/time) (~'.start ~this-v)) (~'.duration ~this-v))
-                   )
-                  ))
-                ~set-more)
-          )))
-    ~'(OnDestroy [this]
-        (swap! tween.core/REGISTRY dissoc (.uid this))))
-    (~'defn ~sym [~'& ~'more] (~'apply ~'tween.core/make (~'cons ~compsym ~'more)))
+              (do
+                (set! (.ratio ~this-v) 
+                  (float ((.easefn ~this)
+                   (/ (- (UnityEngine.Time/time) (.start ~this-v)) 
+                      (.duration ~this-v)) )))
+                 ~set-more)) ))
+  (~'OnDestroy [~'this]
+      (swap! tween.core/REGISTRY dissoc (.uid ~'this))))
 
-  )))
-  
+  (defn ~sym ~'[& more] (apply tween.core/make (cons ~compsym ~'more)))
+
+)))
+
  
  
 
@@ -216,3 +212,4 @@
 
 
 
+ 
