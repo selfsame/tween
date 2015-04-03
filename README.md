@@ -6,8 +6,8 @@ This is still experimental, feedback on overall design is welcome.
 ## implementation
 
 * Tweening is implemented as a component for each tweenable property, this avoids garbage collection allowing high fps.  A tween channel will reuse an existing component, for best performance attach tweens to an object before cloning in game.
-* A proxy <Tween> type stores the specific values of a tween configuration, and can be used as a fn on gameobjects to initiate a tween.
-* each property channel has a constructor to create a proxy <Tween>. ```scale``` is the constructor fn for the ```scale_tween``` component.
+* A proxy ```<Tween>``` type stores the specific values of a tween configuration, and can be used as a fn on gameobjects to initiate a tween.
+* each property channel has a constructor to create a proxy ```<Tween>```. ```scale``` is the constructor fn for the ```scale_tween``` component.
 
 # usage
 ```clj
@@ -50,9 +50,7 @@ Tweens can have the following opts:
 ```
 
 # callbacks/chained tweens
-callback functions take 1 arg, of the gameobject the tween was attached to
-
-A <Tween> is a suitable callback
+callbacks are called after the tween has finished. They take 1 arg - the gameobject the tween was attached to:
 ```clj
 (def cb 
   (tween/position 
@@ -60,19 +58,19 @@ A <Tween> is a suitable callback
     (fn [go] (UnityEngine.Debug/Log (str "tween ended for " go)))))
 ```
 
-and <Tweens> are suitable callbacks
+```<Tweens>``` are suitable callbacks
 ```clj
 (def b (tween/position (Vector3. 0 0 0) 0.5))
 (def a (tween/position (Vector3. 0 -2 0) 0.5 b))
 ```
 
-callbacks are atomic, to facilitate cyclical <Tween> chains. Associating :callback will actually swap an atom
+callbacks are atomic, to facilitate cyclical ```<Tween>``` chains. Associating :callback will actually swap an atom:
 ```clj
 (assoc b :callback a)
 ;will now repeat
 ```
 
-<Tweens> can be combined with comp
+```<Tweens>``` can be combined with comp
 ```clj
 (def comp-tween (tween-a tween-b))
 (comp-tween (GameObject.))
