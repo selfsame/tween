@@ -11,22 +11,31 @@
 ;[ ] tweens should call finish with remainder float, if a callback is a tween add remainder to start time
 ;[x] when recycling tween comp or destroying, make sure uid is dissoc'd from REGISTRY
 
-(defn V+ [^Vector3 a ^Vector3 b] (Vector3/op_Addition a b))
-(defn V- [^Vector3 a ^Vector3 b] (Vector3/op_Subtraction a b))
-(defn V* [a b] (Vector3/op_Multiply a b))
-(defn V÷ [a b] (Vector3/op_Division a b))
-(defn Vx [^Vector3 a ^Vector3 b] (Vector3/Cross a b))
+(defn -V+ [^Vector3 a ^Vector3 b] (Vector3/op_Addition a b))
+
 
 (def ^:private UID (atom 0))
-(def ^:private REGISTRY (atom {}))
-(def ^:private PROP-GETS (atom {}))
+(def REGISTRY (atom {}))
+(def PROP-GETS (atom {}))
 
-(defn ^:private finish [uid c]
+(defn finish [uid c]
   (when-let [f (get @REGISTRY uid)]
     (swap! REGISTRY dissoc uid)
     (f c))) 
 
-(deftype Tween [^System.MonoType component target opts callbacks]
+(def ^:private easing 
+  {:pow2 (fn [r] (* r r))
+    :pow3 (fn [r] (* r r r))
+    :pow4 (fn [r] (* r r r r))
+    :pow5 (fn [r] (* r r r r r))
+  :in (fn [f r] (f r))
+  :out (fn [f r] (- 1 (f (- 1 r))))
+  :inout (fn [fin fout r]
+          (cond (< r 0.5) (/ (fin (* 2 r)) 2)
+                  :else (- 1 (/ (fout (* 2 (- 1 r))) 2))))})
+
+
+(deftype Tween [^System.MonoType component opts callbacks]
   clojure.lang.IObj
   (ToString [this] (str "" component "|" (:duration opts)))
   (meta [this] (meta opts))
@@ -40,80 +49,131 @@
   (assoc [this k v]
     (if (= k :callback)
       (do (reset! callbacks v) this)
-      (Tween. component target (assoc opts k v) (atom @callbacks))))
+      (Tween. component (assoc opts k v) (atom @callbacks))))
 
   clojure.lang.IPersistentCollection
   (equiv [self o]
     (if (instance? Tween o)
       (and (= component (.component o))
-         (= target (.target o))
-         (= opts (.opts o)))
+         (= opts (.opts o))
+         (= @callbacks @(.callbacks o)))
       false))
 
   clojure.lang.IFn
   (invoke [this go] 
     (let [pre-c (.GetComponent go component) 
-        c (or pre-c (add-component go component))
+        c (or pre-c (.AddComponent go component))
         uid (int (swap! UID inc))]
-      (when pre-c 
-        (swap! REGISTRY dissoc (.uid c))
-        (set! (.value c) (.target c)))
+      (set! (.active c) true)
+      (set! (.value c) (.target c))
+      (if pre-c 
+        (do (swap! REGISTRY dissoc (.uid c))
+            (set! (.value c) (.target c)))
+        (set! (.value c)  ((.getfn c) go)))
       (when @callbacks
         (swap! REGISTRY conj {uid @callbacks}))
       (set! (.uid c) uid)
       (set! (.start c) (float (UnityEngine.Time/time)))
       (set! (.duration c) (float (:duration opts)))
       
-      (when-let [getter (get @PROP-GETS (last (clojure.string/split (str component) #"\.")))]
-        (set! (.value c)  (getter go)))
-      (if (:relative opts)
-        (set! (.target c) (V+ (.value c) target))
-        (set! (.target c) target))
-      go)) )
+      
+      (if (:+ opts) 
+        (do ;(set! (.relative c) true)
+            (set! (.target c) ((.addfn c) (.value c) (:target opts))))
+        (set! (.target c) (:target opts)))
+      (when-not (= (.easesig c) [(:in opts) (:out opts)]) 
+        (set! (.easesig c) [(:in opts)(:out opts) ])
+        (cond 
+          (and (:in opts) (:out opts)) 
+            (set! (.easefn c) #((:inout easing) (get easing (:in opts)) (get easing (:out opts)) %))
+          (:in opts) 
+            (set! (.easefn c) #((:in easing) (get easing (:in opts) ) %))
+          (:out opts) 
+            (set! (.easefn c) #((:out easing) (get easing (:out opts)) %))
+          :else 
+            (set! (.easefn c) (fn [r] r))))
+      )
+      go))
 
 (defn make [c target & more]
-  (let [args (conj {:duration 1.0 :relative false :callback nil}
+  (let [args (conj {:target target :duration 1.0 :+ false :callback nil}
         (into {} (mapv 
           #(cond 
-            (= :+ %) {:relative true}
+            (= :+ %) {:+ true}
             (number? %) {:duration %}
+            (map? %) %
+            (#{:pow2 :pow3 :pow4 :pow5} %) {:in % :out %}
             (instance? clojure.lang.IFn %) {:callback %}) 
-        more)))]
-  (Tween. c target (dissoc args :callback) (atom (:callback args)))))
+        more)))
+        ]
+  (Tween. c (dissoc args :callback) (atom (:callback args)))))
 
 
+(defn- sort-methods [code]
+  (if (sequential? code)
+    (case (first code)
+      -get {:getter (rest code)}
+      -set {:setter (rest code)}
+      -value {:valuer (rest code)}
+      -add {:adder (cons 'fn (rest code))}
+      -subtract {:subtractor (cons 'fn (rest code))}
+      {}) {}))
 
+(def ^{:private true} default-methods 
+  {:getter [['this] ()]
+    :valuer [['this] ()]
+    :setter nil
+    :adder '(fn [a b] (Vector3/op_Addition a b))
+    :subtractor '(fn [a b] (Vector3/op_Subtraction a b))
+    })
 
-
-(defmacro deftween [sym props getter valuer & setter]
-  (let [compsym (symbol (str sym "_comp"))
-        res-props (concat '[^float start ^float duration ^boolean relative ^float ratio ^int uid] props)
-        [_ [this] get-more] getter
-        [_ [this-v] value-more] valuer
-        set-more (if (first setter) (first (drop 2 (first setter))) (list 'set! get-more value-more))]
+(defmacro deftween [sym props & methods ] ;getter valuer & setter
+  (let [{:keys [getter valuer setter adder]} (conj default-methods (into {} (map sort-methods methods)))
+        compsym (symbol (str sym "_tween"))
+        res-props (concat '[^boolean active ^float delay ^float start ^float duration ^boolean relative ^float ratio ^int uid
+                           getfn addfn easefn easesig] props)
+        [[this] get-more] getter
+        [[this-v] value-more] valuer
+        getterfn (cons 'fn getter)
+        set-more (or setter (list 'set! get-more value-more))]
   `(~'do
-    (~'swap! ~'PROP-GETS ~'conj {(~'str (~'quote ~sym)) (~'fn [~this] ~get-more)})
-  (~'arcadia.core/defcomponent ~compsym ~res-props
-   (~'Awake [~this]
-    ('~use '~'hard.core)
-      (~'set! (~'.duration ~this) (float 5.0))
-      (~'set! (~'.start ~this) (~'UnityEngine.Time/time))
-      (~'set! (~'.value ~this) ~get-more)
-      (~'set! (~'.target ~this) ~get-more))
-   (~'Update [~this-v]
-      (~'if (~'> (~'- (~'UnityEngine.Time/time) (~'.start ~this-v)) (~'.duration ~this-v))
-          (~'do 
-            (~'finish (~'.uid ~this-v) (~'.gameObject ~this-v))) 
+    (~'swap! ~'tween.core/PROP-GETS ~'conj {(~'str (~'quote ~compsym)) (~'fn [~this] ~get-more)})
+    (~'arcadia.core/defcomponent ~compsym ~res-props
+     (~'Awake [~this]
+      ('~use '~'hard.core)
+        (~'set! (~'.getfn ~this) ~getterfn)
+        (~'set! (~'.addfn ~this) ~adder)
+        (~'set! (~'.duration ~this) (float 5.0))
+        (~'set! (~'.start ~this) (~'UnityEngine.Time/time))
+        (~'set! (~'.value ~this) ~get-more)
+        (~'set! (~'.target ~this) ~get-more))
+     (~'Update [~this-v]
+        (~'if (~'.active ~this-v)
+
+          (~'if  (~'> (~'- (~'UnityEngine.Time/time) (~'.start ~this-v)) (~'.duration ~this-v))
+              (~'do 
+                (~'set! (~'.ratio ~this-v) ~'(float 1.0))
+                ~set-more
+                (~'set! (~'.active ~this-v) ~'false)
+                (~'tween.core/finish (~'.uid ~this-v) (~'.gameObject ~this-v))
+                (~'set! (~'.delay ~this-v) (~'float (~'- (~'.delay ~this-v) (~'- (~'- (~'UnityEngine.Time/time) (~'.start ~this-v)) (~'.duration ~this-v))))))
+              
           (~'do
-            (~'set! (~'.ratio ~this-v) (~'float (~'/ (~'- (~'UnityEngine.Time/time) (~'.start ~this-v)) (~'.duration ~this-v))))
-            ~set-more)))
-  ~'(OnDestroy [this]
-    (swap! REGISTRY dissoc (.uid this))) )
-  (~'defn ~sym [~'& ~'more] (~'apply ~'make (~'cons ~compsym ~'more)))
+                (~'set! (~'.ratio ~this-v) 
+                  (~'float ((~'.easefn ~this)
+                   (~'/ (~'- (~'UnityEngine.Time/time) (~'.start ~this-v)) (~'.duration ~this-v))
+                   )
+                  ))
+                ~set-more)
+          )))
+    ~'(OnDestroy [this]
+        (swap! tween.core/REGISTRY dissoc (.uid this))))
+    (~'defn ~sym [~'& ~'more] (~'apply ~'tween.core/make (~'cons ~compsym ~'more)))
+
   )))
+  
  
-
-
+ 
 
 
 (deftween position [^Vector3 value ^Vector3 target]
@@ -129,8 +189,23 @@
   (-value [this] (Vector3/Lerp (.value this) (.target this) (.ratio this))))
 
 (deftween material-color [^Color value ^Color target]
+  (-add [a b] (Color/op_Addition a b))
   (-get [this] (.color (.material (.GetComponent this UnityEngine.Renderer))))
   (-value [this] (Color/Lerp (.value this) (.target this) (.ratio this))))
+
+(deftween text-color [^Color value ^Color target]
+  (-add [a b] (Color/op_Addition a b))
+  (-get [this] (.color (.GetComponent this "TextMesh")))
+  (-value [this] (Color/Lerp (.value this) (.target this) (.ratio this))))
+
+(deftween light-color [^Color value ^Color target]
+  (-add [a b] (Color/op_Addition a b))
+  (-get [this] (.color (.GetComponent this "Light")))
+  (-value [this] (Color/Lerp (.value this) (.target this) (.ratio this))))
+
+(deftween light-range [^float value ^float target]
+  (-get [this] (.range (.GetComponent this "Light")))
+  (-value [this] (float (+ value (* (- target value) (.ratio this))))))
 
 (deftween material-texture-offset [^Vector2 value ^Vector2 target] 
   (-get [this] (.GetTextureOffset (.material (.GetComponent this UnityEngine.Renderer) "_MainTex")))
@@ -141,31 +216,3 @@
 
 
 
-
-
-
-
-
-; (def t (make position (Vector3. -5 0 0) 0.5 ))
-; (def tt (make position (Vector3. 5 0 0) 0.5 t))
-; (assoc t :callback tt)
-
-; (def rt (make position (Vector3. -1 0 0) 0.5 :+))
-; (def e (make euler (Vector3. 0 90 0) 0.5  :+))
-; (assoc rt :callback (comp rt e))
-
-
-; (defn rand-pos [] (make position (Vector3. (rand)(rand)(rand)) (rand) :+ #((rand-pos) %)))
-
-
-; (defn test-tweens [dim]
-;   (clear-cloned)
-;   (destroy! (find-name "trash"))
-;   (def trash (or (active) (create-primitive :sphere)))
-;   (set! (.name trash) "trash")
-;   (add-component trash t-position)
-
-;   (doall (for [x (range dim) y (range dim)] 
-;            (let [n (clone! trash (v* [x 0 y] 2))]
-;              ((rand-pos) n)
-;              ))))
