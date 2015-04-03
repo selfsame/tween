@@ -1,6 +1,8 @@
 # tween
 A fast tween library for arcadia/Unity
 
+![tween example](http://selfsamegames.com/gifs/img/bubb23.gif)
+
 This is still experimental, feedback on overall design is welcome.
 
 ## implementation
@@ -41,12 +43,12 @@ A constructor takes a target value, and options which can be:
 
 Tweens can have the following opts:
 ```clj
-:target
-:duration
-:in
-:out
-:callback
-:+
+:target (compatible value)
+:duration (float)
+:in (nil :pow2 :pow3 :pow4 :pow5)
+:out (nil :pow2 :pow3 :pow4 :pow5)
+:callback (fn)
+:+ (bool)
 ```
 
 # callbacks/chained tweens
