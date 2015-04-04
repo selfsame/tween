@@ -21,6 +21,8 @@ This is still experimental, feedback on overall design is welcome.
 (my-move (GameObject.))
 ```
 
+
+
 ## constructor args
 A constructor takes a target value, and options which can be:
 * A map of explicit options to merge
@@ -76,6 +78,11 @@ callbacks are atomic, to facilitate cyclical ```<Tween>``` chains. Associating :
 (comp-tween (GameObject.))
 ```
 
+## provided tweens
+```
+position scale euler material-color text-color light-color light-range material-texture-offset
+```
+
 # custom tweens
 You can define new tween properties with the ```deftween``` macro.
 
@@ -116,3 +123,5 @@ If a different form is needed, you can also define a ```-set``` method (note the
                                   "_MainTex" 
                                   (Vector2/Lerp (.value this) (.target this) (.ratio this)))))
  ```
+
+

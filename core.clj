@@ -1,5 +1,6 @@
 (ns tween.core
   (:require arcadia.core clojure.string)
+  (:use tween.protocols)
   (:import [UnityEngine Color Vector3 GameObject Color]))
 
 
@@ -7,11 +8,13 @@
 
 (def ^:private UID (atom 0))
 (def REGISTRY (atom {}))
+(declare callable?)
 
+ 
 (defn finish [uid c]
   (when-let [f (get @REGISTRY uid)]
-    (swap! REGISTRY dissoc uid)
-    (f c))) 
+    ;(swap! REGISTRY dissoc uid)
+    (mapv #(when (callable? %) (% c)) f))) 
 
 (def ^:private easing 
   {:pow2 (fn [r] (* r r))
@@ -37,6 +40,10 @@
 
         ))))
 
+(use 'hard.core)
+
+
+
 
 (deftype Tween [^System.MonoType component opts callbacks]
   clojure.lang.IObj
@@ -51,7 +58,7 @@
   clojure.lang.Associative
   (assoc [this k v]
     (if (= k :callback)
-      (do (reset! callbacks v) this)
+      (do (reset! callbacks v) (if (sequential? this) this [this]))
       (Tween. component (assoc opts k v) (atom @callbacks))))
 
   clojure.lang.IPersistentCollection
@@ -62,6 +69,16 @@
          (= @callbacks @(.callbacks o)))
       false))
 
+  tween.protocols.Chainable
+  (-link! [a b] 
+    (when (callable? b)
+          (swap! (.callbacks a) #(vec (conj (set %) b))))
+          b)
+  (-unlink! [a b]
+    (if (or (instance? Tween b) (instance? clojure.lang.IFn b))
+      (swap! (.callbacks a) #(vec (disj (set %) b)))))
+  (-links [a] (.callbacks a))
+
   clojure.lang.IFn
   (invoke [this go] 
     (let [pre-c (.GetComponent go component) 
@@ -69,9 +86,9 @@
       (set! (.active c) true)
       (set! (.value c) (.target c))
       (if pre-c 
-        (do (set! (.value c) (.target c)))
-        (do (set! (.value c)  ((.getfn c) go))
-             ))
+        (do (set! (.value c) ((.getfn c) go)))
+        (do (set! (.value c)  ((.getfn c) go))))
+
       (set! (.uid c) (int (swap! UID inc)))
       (if @callbacks
         (swap! REGISTRY conj {(.uid c) @callbacks})
@@ -90,6 +107,19 @@
         (set! (.easefn c) (get easeregistry [(:in opts)(:out opts) ])))
       go)))
 
+(defn callable? [x] (if 
+  (or (instance? Tween x) (fn? x)) true false))
+
+(defn links [a] (when (instance? Tween a) (-links a)))
+(defn unlink! [a b] (-unlink! a b))
+(defn link! [a b & more]
+  (when b
+    (when (instance? Tween a)
+      (-link! a b)
+      (when more (apply link! (cons b more))))))
+
+
+
 (defn make [c target & more]
   (let [args (conj {:target target :duration 1.0 :+ false :callback nil :delay 0.0}
         (into {} (mapv 
@@ -98,7 +128,7 @@
             (number? %) {:duration %}
             (map? %) %
             (#{:pow2 :pow3 :pow4 :pow5} %) {:in % :out %}
-            (instance? clojure.lang.IFn %) {:callback %}) 
+            (callable? %) {:callback [%]}) 
         more)))
         ]
   (Tween. c (dissoc args :callback) (atom (:callback args)))))
