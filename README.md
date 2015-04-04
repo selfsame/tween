@@ -85,6 +85,12 @@ callbacks are atomic, to facilitate cyclical ```<Tween>``` chains. Associating :
 position scale euler material-color text-color light-color light-range material-texture-offset
 ```
 
+
+## provided tweens 
+```
+position scale euler material-color text-color light-color light-range material-texture-offset
+```
+
 # custom tweens
 You can define new tween properties with the ```deftween``` macro.
 
