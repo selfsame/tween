@@ -23,17 +23,15 @@ This is still experimental, feedback on overall design is welcome.
 (my-move (GameObject.))
 ```
 
-
-
 ## constructor args
-A constructor takes a target value, and options which can be:
-* A map of explicit options to merge
-* duration (a float)
-* :+ (signifies a relative tween)
-* :pow2 :pow3 :pow4 :pow5 (will use easing for both :in and :out)
-* a callback (function)
+A constructor takes a target value, and optional args with no order:
+  * ```{}``` A map to merge with found options
+  * ```0.7``` A float - ```{:duration 0.7}```
+  * ```:+``` relative tween flag - ```{:+ true}```
+  * ```:pow2 :pow3 :pow4 :pow5``` easing shorthand for same in and out - ```{:in :pow2 :out :pow2}```
+  * ```#(%)``` a fn - ```{:callback (atom [#(%)])}```
 
-# Tweens are associative
+# Tweens are semi-associative
 ```clj
 (def z (tween/euler (Vector3. 45 0 100) 0.5))
 (def y (assoc z :duration 1.2))
@@ -43,18 +41,19 @@ A constructor takes a target value, and options which can be:
 ;0.5
 ```
 
-Tweens can have the following opts:
+# Tweens are sort of functions
 ```clj
-:target (compatible value)
-:duration (float)
-:in (nil :pow2 :pow3 :pow4 :pow5)
-:out (nil :pow2 :pow3 :pow4 :pow5)
-:callback (fn)
-:+ (bool)
+(my-tween my-game-object)
+(map my-tween my-col)
 ```
 
+
 # callbacks/chained tweens
-callbacks are called after the tween has finished. They take 1 arg - the gameobject the tween was attached to:
+
+A Tween has an internal atom of callbacks. They are called after the tween has finished, and should take 1 arg - the gameobject the tween was attached to.
+
+Callbacks can be added to the opts with ```:callback```. A fn in the constructor also works.
+
 ```clj
 (def cb 
   (tween/position 
@@ -68,28 +67,27 @@ callbacks are called after the tween has finished. They take 1 arg - the gameobj
 (def a (tween/position (Vector3. 0 -2 0) 0.5 b))
 ```
 
-callbacks are atomic, to facilitate cyclical ```<Tween>``` chains. Associating :callback will actually swap an atom:
+Callbacks can be also be configured with ```link! unlink! links```
 ```clj
-(assoc b :callback a)
-;will now repeat
-```
-
-```<Tweens>``` can be combined with comp
-```clj
-(def comp-tween (tween-a tween-b))
-(comp-tween (GameObject.))
-```
-
-## provided tweens
-```
-position scale euler material-color text-color light-color light-range material-texture-offset
+(link! a b a)
+(link! b z y)
+;a - b - a - CYCLE
+;       \ z - y
 ```
 
 
-## provided tweens 
+## currently provided tweens (```tween.core```)
 ```
-position scale euler material-color text-color light-color light-range material-texture-offset
+position 
+scale
+euler 
+material-color 
+text-color 
+light-color 
+light-range 
+material-texture-offset
 ```
+
 
 # custom tweens
 You can define new tween properties with the ```deftween``` macro.
@@ -109,9 +107,7 @@ The macro will also define hinted props for
 ```^boolean active ^float delay ^float start ^float duration ^boolean relative ^float ratio ^int uid```
 as well as non-serialziable props for ```getfn addfn easefn``` which hold clojure fn's
 
-
-
-To allow relative tweens, you must provide an ```-add``` method (it will default to Vector3/op_Addition)
+To allow relative tweening, you must provide an ```-add``` method (it defaults to Vector3/op_Addition)
 
 ```clj
 (deftween text-color [^Color value ^Color target]
@@ -120,9 +116,8 @@ To allow relative tweens, you must provide an ```-add``` method (it will default
   (-value [this] (Color/Lerp (.value this) (.target this) (.ratio this))))
  ```
 
-Setting the tween value defaults to the form ```(set! ~-get ~-value)```. 
+Setting the tween value defaults to the form ```(set! ~-get ~-value)```. If a different form is needed, you can also define a ```-set``` method (note the -value method is now unused)
 
-If a different form is needed, you can also define a ```-set``` method (note the -value method is now unused)
 ```clj
  (deftween material-texture-offset [^Vector2 value ^Vector2 target] 
   (-get [this] (.GetTextureOffset (.material (.GetComponent this UnityEngine.Renderer) "_MainTex")))
