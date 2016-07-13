@@ -2,7 +2,7 @@
   (:import Vector3
     [UnityEngine Resources]
     [System GC]
-    MonoBehaviour IEnumerator WaitForSeconds Time)
+    MonoBehaviour IEnumerator WaitForSeconds Time Mathf)
   (:require [clojure.walk :as walk]
     [clojure.pprint :as pprint]
     [pdfn.core :refer [ppexpand]])
@@ -88,32 +88,35 @@
         (log "garbage!")
         (System.GC/Collect) 
         (vreset! garbage Time/time)) true)
-'(defonce wednesday (every-frame #(take-out-trash!)))
+;(defonce wednesday (every-frame #(take-out-trash!)))
 
 (deftype TimeLineCursor [
-  ^:volatile-mutable ^int     i 
-  ^:volatile-mutable ^boolean v
+  ^:volatile-mutable ^System.Int64 i 
+  ^:volatile-mutable ^boolean      v
   ^:volatile-mutable ^boolean active])
 
-(defn timeline [& fns]
-  (let [que (volatile! fns)
+(defn timeline [-fns]
+  (let [fns (make-array Object (count -fns))
         ^MonoBehaviour coro-root (mono-obj)
         ^TimeLineCursor cursor (TimeLineCursor. 0 false true)]
-    (.StartCoroutine
-      coro-root
+    (dorun (map-indexed #(aset fns %1 %2) -fns))
+    (.StartCoroutine coro-root
       (reify IEnumerator
         (MoveNext [this]
-          (set! (.v cursor) (try ((get fns (.i cursor))) (catch Exception e nil)))
-          (if (.v cursor) nil
-              (set! (.i cursor) (inc (.i cursor))))
-          (or (< (.i cursor) (count fns)) 
-              (set! (.active cursor) false)))
-        (get_Current [this] (.v cursor))))
+          (set! (.v cursor) 
+            (try ((aget fns (.i cursor)))
+              (catch Exception e false)))
+          (if (.v cursor) true
+            (if (< (.i cursor) (- (.Length fns) 1)) 
+              (set! (.i cursor) (+ (.i cursor) 1))
+              (set! (.active cursor) false))))
+        (get_Current [this] (if (.v cursor) true false))))
     (fn [] (.active cursor))))
 
 (defn args->opts [m]
-  (into {} (mapv 
+  (into {:duration 0.5} (mapv 
     #(cond (map? %) %
+           (number? %) {:duration %}
            (= :+ %) {:+ true}
            (#{:pow2 :pow3 :pow4 :pow5} %) {:in % :out %}) m)))
 
@@ -122,7 +125,7 @@
 (deftype TweenCursor [
   ^:volatile-mutable ^boolean          initiated
   ^:volatile-mutable ^System.Single    start 
-  ^:volatile-mutable ^System.Single    ratio])
+  ^System.Single    duration])
 
 (deftype Pair       [^:volatile-mutable a b])
 (deftype Pair-v3    [^:volatile-mutable ^Vector3 a ^Vector3 b])
@@ -131,12 +134,11 @@
   'UnityEngine.Vector3 'tween.core.Pair-v3
   'UnityEngine.Color   'tween.core.Pair-color})
 
-(defmacro tween [m & more]
+(defmacro tween [m o & more]
   (let [opts      (args->opts more)
         easefn    (list 'get 'tween.core/easeregistry ((juxt :in :out) opts))
-        this      (with-meta THIS {:tag UnityEngine.GameObject})
-        duration  (with-meta 'duration {:tag System.Double})
-        cursor    (with-meta 'cursor {:tag tween.core.TweenCursor})
+        this      (with-meta THIS {} #_{:tag 'UnityEngine.GameObject} )
+        cursor    (with-meta 'cursor {} #_{:tag 'tween.core.TweenCursor} )
         paths     (map-paths m)
         prop-data (remove (comp nil? first) 
                     (map (juxt (comp @REGISTRY first) last) paths))
@@ -151,31 +153,46 @@
             (with-meta %2 {:tag (get pair-types %1 'tween.core.Pair)}) 
             (list 'new (get pair-types %1 'Pair) %3 %4)) 
           tags pairsyms getters targets)]
-   `(~'fn [~this ~duration]     
-      (~'let [~cursor ~'(tween.core.TweenCursor. false Time/time 0.0)
-              ~@val-binds]
-        (~'fn []
-          (~'when-not ~'(.initiated cursor) 
-          ~'(set! (.initiated cursor) true)
-          ~'(set! (.start cursor) Time/time)
-          ~@(map #(list 'set! (list '.a %1) %2) pairsyms getters))
-        ~'(set! (.ratio cursor) 
-            (- 1 (/ (- duration (- Time/time (.start cursor))) duration)))
-        ~@(map-indexed
-          #(list 'set! (:get (first %2)) (list (:lerp (first %2))
-            (list '.a (get pairsyms %1))
-            (list '.b (get pairsyms %1))
-            (list easefn '(.ratio cursor)))) 
-          prop-data)
-        ~'(< (- Time/time (.start cursor)) duration) )))))
+   `(~'let [~this ~o
+            ~cursor (~'tween.core.TweenCursor. false ~'Time/time ~(:duration opts))
+            ~@val-binds]
+      (~'fn []
+        (~'when-not ~'(.initiated cursor) 
+        ~'(set! (.initiated cursor) true)
+        ~'(set! (.start cursor) Time/time)
+        ~@(map #(list 'set! (list '.a %1) %2) pairsyms getters))
+      ~@(map-indexed
+        #(list 'set! (:get (first %2)) (list (:lerp (first %2))
+          (list '.a (get pairsyms %1))
+          (list '.b (get pairsyms %1))
+          (list 'Mathf/InverseLerp 0.0 
+            '(.duration cursor) 
+            '(- Time/time (.start cursor)))))
+        prop-data)
+      ~'(< (- Time/time (.start cursor)) (.duration cursor)) ))))
 
 (deftween [:position] [this]
   {:get (.position (.transform this))
    :lerp Vector3/Lerp
    :tag UnityEngine.Vector3})
 
-(deftween [:local-scale] [this]
+(deftween [:local :position] [this]
+  {:get (.localPosition (.transform this))
+   :lerp Vector3/Lerp
+   :tag UnityEngine.Vector3})
+
+(deftween [:local :scale] [this]
   {:get (.localScale (.transform this))
+   :lerp Vector3/Lerp
+   :tag UnityEngine.Vector3})
+
+(deftween [:euler] [this]
+  {:get (.eulerAngles (.transform this))
+   :lerp Vector3/Lerp
+   :tag UnityEngine.Vector3})
+
+(deftween [:local :euler] [this]
+  {:get (.localEulerAngles (.transform this))
    :lerp Vector3/Lerp
    :tag UnityEngine.Vector3})
 
@@ -184,4 +201,4 @@
    :lerp UnityEngine.Color/Lerp
    :tag UnityEngine.Color})
 
-
+(ppexpand (tween {:position (->v3 1 2 3)} (clone! :ball) 2.0))
