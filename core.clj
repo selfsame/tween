@@ -96,16 +96,19 @@
   ^:volatile-mutable ^boolean active])
 
 (defn timeline [-fns]
-  (let [fns (make-array Object (count -fns))
+  (let [^|System.Object[]| fns (make-array Object (count -fns))
         ^MonoBehaviour coro-root (mono-obj)
         ^TimeLineCursor cursor (TimeLineCursor. 0 false true)]
     (dorun (map-indexed #(aset fns %1 %2) -fns))
     (.StartCoroutine coro-root
       (reify IEnumerator
         (MoveNext [this]
-          (set! (.v cursor) 
-            (try ((aget fns (.i cursor)))
-              (catch Exception e false)))
+          (let [res (try ((aget fns (.i cursor)))
+              (catch Exception e false))]
+            (if (= res :break) 
+                (do (set! (.i cursor) (.Length fns) )
+                    (set! (.v cursor) false))
+                (set! (.v cursor) res)))
           (if (.v cursor) true
             (if (< (.i cursor) (- (.Length fns) 1)) 
               (set! (.i cursor) (+ (.i cursor) 1))
@@ -196,9 +199,20 @@
    :lerp Vector3/Lerp
    :tag UnityEngine.Vector3})
 
+(deftween [:material-color] [this]
+  {:get (.color this)
+   :lerp UnityEngine.Color/Lerp
+   :tag UnityEngine.Color})
+
+
+
+
+
+
 (deftween [:material :color] [this]
   {:get (.color (.material (.GetComponent this UnityEngine.Renderer)))
    :lerp UnityEngine.Color/Lerp
    :tag UnityEngine.Color})
 
-(ppexpand (tween {:position (->v3 1 2 3)} (clone! :ball) 2.0))
+
+'(ppexpand (tween {:material-color (color 1 2 3)} (clone! :ball) 2.0))
