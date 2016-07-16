@@ -1,19 +1,17 @@
 (ns tween.todo
   (:require [clojure.walk :as walk]
     [clojure.pprint :as pprint]
-    [pdfn.core :refer [ppexpand]]
-    )
+    [pdfn.core :refer [ppexpand]])
   (:use 
     arcadia.core
     hard.core
     hard.input
-    tween.core)
-  (:import [UnityEngine Vector3]))
-
-(defn foo [^System.String s] (str s s))
+    tween.core
+    pool)
+  (:import [UnityEngine Vector3]
+    selfsame))
 
 ;TODO stuffs
-
 '[perf
   (( ) discover tween fn form that doesn't alloc memory)]
 
@@ -24,43 +22,37 @@
          consuming the que as a lazy seq would allow control forms to access the tempo)
   ]
 
-(deftype Frog [^System.String name ^System.Int32 age])
-
-'(deftype Fish [])
 
 
 
+(def running (volatile! false))
 
-(def POOL-CTORS (atom {}))
+(deftype Tween [^:volatile-mutable ^Vector3 from ^:volatile-mutable ^Vector3 to])
+(def-pool 100000 Tween ^Vector3 from ^Vector3 to)
+(ppexpand (def-pool 100000 Tween ^Vector3 from ^Vector3 to))
 
-(defmacro def-pool [sym type-sym & fields]
-  (let [pool# (get @POOL-CTORS type-sym (get (swap! POOL-CTORS assoc type-sym (gensym sym)) type-sym ))]
-     
-    `(do 
-      (~'def ~pool# (~'make-array ~'System.Object 1000))
-      (~'defn ~sym [~@fields]
-        (~'aset ~pool# 1 
-          (new ~type-sym ~@fields))))
-    ))
+(!Tween (Tween. (Vector3.) (Vector3.) ))
+(!Tween (Tween. (Vector3.) (Vector3.) ))
+
+(defn work [] 
+  (when @running 
+      #_(dotimes [i 1000] 
+        (do 
+          (Tween.  (Vector3.) (Vector3.))
+          ;(!tween* (tween* (Vector3.) (Vector3.) ))
+          ))  
+     ; (!tween* (tween* (Vector3.) (Vector3.) ))
+     (dotimes [i 1000]  
+     ;(Tween.  (Vector3.) (Vector3.))
+     (!Tween (*Tween (Vector3.) (Vector3.) ))
+      ) true))
+
+(defn bench []
+  (vreset! running true)
+  (every-frame (fn [] (work))))
 
 
-
-'(ppexpand (def-pool frog Frog ^System.String name age))
-
-(def-pool frog Frog ^System.String name age)
-@POOL-CTORS
-
-'(map #(aset frog22160 % (Frog. "sam" %)) (take 400 (repeatedly #(rand-int 999))))
+(vswap! running not)
 
 
-
-'(let [ar frog22160] 
-(every-frame (fn []
-(count 
-(loop [res (list) idx 0]
-  (if (<= (.Length ar) idx) res
-      (recur 
-        (if (aget ar idx) 
-            (cons (aget ar idx) res) 
-            res)
-        (inc idx))))))))
+(bench)

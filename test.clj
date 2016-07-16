@@ -10,28 +10,42 @@
     tween.core))
 
 
+(defmacro ?f [] `UnityEngine.Random/value)
+
+
 (declare rand-action start-demo)
 
 
+(def run false)
+(def run true)
 
-(defn hue [^UnityEngine.Material o]
+(defn hue [^UnityEngine.Material m ^UnityEngine.GameObject o]
   (timeline [
-    (wait (rand 0.1))
-    (tween {:material-color (color (rand) (rand) (rand))} o 0.3)
-    #(do (hue o) nil)]))
+    ;(wait (?f))
+    (tween {:material-color (UnityEngine.Color. (?f) (?f) (?f))} m 0.5)
+    ;(wait (?f))
+    (tween {:local {:scale (Vector3. (?f) (?f) (?f))}} o 1.5)
+    #(when run (hue m o) nil)]))
 
 
 (defn start-demo [_] 
   (clear-cloned!)
-  (dorun (for [x (range 12) 
-               z (range 12)]
-    (hue (.material (.GetComponent (clone! :ball (->v3 x 0 z)) 
-                     UnityEngine.Renderer))))))
+  (dorun (for [x (range 15) 
+               z (range 15)
+               :let [o (clone! :ball (->v3 x 0 z)) ]]
+    (hue (.material (.GetComponent o UnityEngine.Renderer))
+        o))))
 
 
 (start-demo nil)
 
 
+
+    #_(timeline
+      [(tween {:local {:scale (->v3 (rand))}} o 1.5)
+       (wait (rand 0.5))
+       (tween {:local {:scale (->v3 1)}} o 2.5)
+       ])
 
 
 
