@@ -1,5 +1,6 @@
 (ns tween.core
-  (:import Vector3
+  (:import Vector3 
+    [UnityEngine Color]
     [UnityEngine Resources]
     [System GC]
     MonoBehaviour IEnumerator WaitForSeconds Time Mathf)
@@ -95,15 +96,16 @@
 
 (defmacro deftag [tag methods]
   (let [sym (symbol (last (re-seq #"[^\.]+" (str tag))))
+        once (gensym (str tag))
         pair-sym (symbol (str "Pair-" sym))
         wm-f #(with-meta % {:tag tag :volatile-mutable true})
         pool-m (zipmap [:p :c :r] (map (comp symbol str) ["<>" "*" "!"] (repeat pair-sym)))
         entry (conj methods {:pair {:tag pair-sym :pool pool-m}})]
     (swap! REGISTRY assoc tag entry)
     `(do 
-      (deftype ~pair-sym [~(wm-f 'a) ~(wm-f 'b)])
-      (def-pool 10000 ~pair-sym ~'a ~'b)
-      (quote ~entry))))
+        (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)])
+        (def-pool 10000 ~pair-sym ~'a ~'b)
+        (quote ~entry))))
 
 
 
@@ -291,12 +293,11 @@
 
 
 
-
 (def run true)
 
 (defn hue [^UnityEngine.Material m ^UnityEngine.GameObject o]
   (timeline [
-    (wait (rand))
+    ;(wait (+ (rand) 0.1))
     (tween {:local 
       {:scale (Vector3. 2.0 2.0 2.0)
        :position (v3+ (.position (.transform o)) 
