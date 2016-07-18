@@ -16,8 +16,10 @@
     hard.core
     hard.input))
 
+
 (defonce REGISTRY (atom {}))
 (defonce THIS (gensym 'this))
+(def panic false)
 
 (def -mono-obj (volatile! nil))
 (defn mono-obj []
@@ -33,8 +35,8 @@
         (MoveNext [this] (f))
         (get_Current [this])))))
 
-(def garbage (volatile! 0))
-(def garbage-active (volatile! false))
+(def garbage (volatile! 0)) 
+(def garbage-active (volatile! true))
 (defn take-out-trash! [] 
   (when (and @garbage-active (> (- Time/time @garbage) 0.7)) 
         (.Enqueue arcadia.repl/work-queue 
@@ -96,20 +98,23 @@
 
 (defmacro deftag [tag methods]
   (let [sym (symbol (last (re-seq #"[^\.]+" (str tag))))
-        once (gensym (str tag))
+        once (gensym (str "_once_" sym))
         pair-sym (symbol (str "Pair-" sym))
         wm-f #(with-meta % {:tag tag :volatile-mutable true})
         pool-m (zipmap [:p :c :r] (map (comp symbol str) ["<>" "*" "!"] (repeat pair-sym)))
         entry (conj methods {:pair {:tag pair-sym :pool pool-m}})]
-    (swap! REGISTRY assoc tag entry)
+    
     `(do 
-        (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)])
+        (defonce ~once 
+          (do 
+           ~(do (swap! REGISTRY assoc tag entry) true)
+            (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)])))
         (def-pool 10000 ~pair-sym ~'a ~'b)
         (quote ~entry))))
 
 
 
-(deftype WaitCursor [
+(deftype ^:once WaitCursor [
   ^:volatile-mutable ^System.Single start 
   ^:volatile-mutable ^boolean       initiated])
 
@@ -127,7 +132,7 @@
 
 
 
-(deftype TimeLineCursor [
+(deftype ^:once TimeLineCursor [
   ^:volatile-mutable ^System.Int64    i 
   ^:volatile-mutable ^boolean         v
   ^:volatile-mutable ^System.Single overage])
@@ -137,6 +142,7 @@
 (def <over> (*TimeLineCursor 0 false 0.0))
 
 (defn timeline [fns]
+  (assert (vector? fns) "timeline requires a vector")
   (let [cnt (count fns)
         ^MonoBehaviour coro-root (mono-obj)
         ^TimeLineCursor cursor (*TimeLineCursor 0 false 0.0)]
@@ -153,6 +159,54 @@
         (get_Current [this] (.v cursor))))
     (fn [] false)))
 
+(defn lazy-timeline [fns]
+  (let [current (volatile! (first fns))
+        fns (volatile! (rest fns))
+        ^MonoBehaviour coro-root (mono-obj)
+        ^TimeLineCursor cursor (*TimeLineCursor 0 false 0.0)]
+    (.StartCoroutine coro-root
+      (reify IEnumerator
+        (MoveNext [this]
+          (when-not panic
+            (set! (.v cursor) (@current))
+            (if (.v cursor) true
+              (if (do (vreset! current (first @fns) )
+                      (vswap! fns rest) @current)
+                true
+                (!TimeLineCursor cursor)))))
+        (get_Current [this] (.v cursor))))
+    (fn [] (if @current true false))))
+
+(defn lazier-timeline [fns]
+  (let [fns (map #(%) fns)
+        current (volatile! (first fns))
+        fns (volatile! (rest fns))
+        ^MonoBehaviour coro-root (mono-obj)
+        ^TimeLineCursor cursor (*TimeLineCursor 0 false 0.0)]
+    (.StartCoroutine coro-root
+      (reify IEnumerator
+        (MoveNext [this]
+          (when-not panic
+            (try (set! (.v cursor) (@current))
+              (if (.v cursor) true
+                (if (do (vreset! current (first @fns))
+                        (vswap! fns rest) @current)
+                    true
+                  (!TimeLineCursor cursor)))
+              (catch Exception e false))))
+        (get_Current [this] (.v cursor))))
+    (fn [] (if @current true false))))
+
+
+
+
+(def seconds (volatile! 0))
+
+'(lazier-timeline 
+  (cycle [
+    (fn [] (wait (rand 5)))
+    (fn [] (lazy-timeline (map #(fn [] (log %)) "dog")))]))
+
 
 
 (defn args->opts [m]
@@ -165,7 +219,7 @@
 
 
 
-(deftype TweenCursor [
+(deftype ^:once TweenCursor [
   ^:volatile-mutable ^boolean          initiated
   ^:volatile-mutable ^System.Single    start 
   ^:volatile-mutable ^System.Single    duration
@@ -195,9 +249,8 @@
             (list (or (-> %2 :pair :pool :c) '*Pair) (:identity %2) %4)) 
           tags tagmaps pairsyms targets)]
    `(~'let [~THIS ~o
-            ~cursor (~'*TweenCursor false ~'Time/time ~(:duration opts) 0.0 0.0)
+            ~cursor (~'*TweenCursor false ~'(float Time/time) ~(:duration opts) (float 0.0) (float 0.0))
             ~@val-binds]
-      ;[~tags ~tagmaps]
       (~'fn []
         (~'when-not ~'(.initiated cursor) 
         ~'(set! (.initiated cursor) true)
@@ -205,7 +258,7 @@
         ~@(map #(list 'set! (list '.a %1) %2) pairsyms getters))
         ~'(set! (.now cursor) (- Time/time (.start cursor)))
         ~'(set! (.ratio cursor) 
-                (Mathf/InverseLerp 0.0 (.duration cursor) (.now cursor)))
+                (float (Mathf/InverseLerp 0.0 (.duration cursor) (.now cursor))))
       ~@(map
          #(list 'set! (:get (first %1)) 
             (list (:lerp %2)
@@ -217,9 +270,10 @@
           true
           (~'do 
             ~@(map #(list (or (-> %1 :pair :pool :r) '!Pair-Object) %2) tagmaps pairsyms)
-            ~'(set! (.overage <over>) (- (.now cursor) (.duration cursor)))
+            ~'(set! (.overage <over>) (float (- (.now cursor) (.duration cursor))))
             ~'(!TweenCursor cursor)
-            false) )))))
+            ;~'(set! (.initiated cursor) false)
+            ))))))
 
 (deftag System.Object       {:lerp (fn [a b _] b)                     :identity (System.Object)})
 (deftag System.Single       {:lerp Mathf/Lerp                         :identity (float 0.0)})
@@ -276,59 +330,64 @@
 
 
 (defn pool-report [] 
-  (pprint/print-table   (mapv #(do {:pool %1 :stats (stats %2)}) 
+  (pprint/print-table   (mapv #(do {:pool %1 :stats (try (stats %2) (catch Exception e :error))}) 
     (into '[<>WaitCursor <>TimeLineCursor <>TweenCursor]
       (map (comp :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))
     (into [<>WaitCursor <>TimeLineCursor <>TweenCursor]
       (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY))))))
 
-(print (pool-report))
-
-
-
-
-
-
-
+(pool-report)
 
 
 
 (def run true)
 
 (defn hue [^UnityEngine.Material m ^UnityEngine.GameObject o]
-  (timeline [
-    ;(wait (+ (rand) 0.1))
-    (tween {:local 
-      {:scale (Vector3. 2.0 2.0 2.0)
-       :position (v3+ (.position (.transform o)) 
-                      (Vector3. 0.0 2.0 0.0))}} o 1.0 {:in :pow5})
-    (tween {:material-color (UnityEngine.Color. (?f) (?f) (?f))} m (float 0.5) {:in :pow3})
-    (tween {:local 
-      {:scale (Vector3. 1.0 1.0 1.0)
-       :position (v3+ (.position (.transform o)) 
-                      (Vector3. 0.0 0.0 0.0))}} o (float (rand 0.5)) :pow5)
-    
-    #(do (hue m o) nil)]))
+  (lazier-timeline (cycle [
+    (fn [] (wait (+ (rand) 0.3)))
+    (fn [] (tween {:material-color (UnityEngine.Color. (?f) (?f) (?f))} m 0.5 {:in :pow3}))
+    (fn [] (tween 
+      {:local {
+        :scale (Vector3. 2.0 2.0 2.0)
+        :position (v3+ (.position (.transform o)) 
+                       (Vector3. 0.0 2.0 0.0))}} o 1.0 {:in :pow5}))
+    ;(fn [] (wait (+ (rand) 0.1)))
+    (fn [] (tween {:material-color (UnityEngine.Color. 1 1 1)} m 0.5 {:in :pow3})) 
+    (fn [] (tween 
+     {:local {
+        :scale (Vector3. 1.0 1.0 1.0)
+        :position (v3+ (.position (.transform o)) 
+                      (Vector3. 0.0 0.0 0.0))}} o 0.5 :pow5))])))
 
 
 (defn start-demo [_] 
   (clear-cloned!)
-  (dorun (for [x (range 40) 
-               z (range 40)
+  (dorun (for [x (range 20) 
+               z (range 20)
                :let [o (clone! :ball (V* (->v3 x 0 z) 2.0)) ]]
     (hue (.material (.GetComponent o UnityEngine.Renderer)) o))) )
 
-(start-demo nil)
 
+(defn fast-demo [_] 
+  (clear-cloned!)
+  (let [o-arr 
+        (into-array System.Object 
+          (for [x (range 20) z (range 20)
+            :let [o (clone! :ball (V* (->v3 x 0 z) 2.0)) ]] o))]
+    ) )
 
-(timeline [ 
+(fast-demo nil)
+
+(lazy-timeline [ 
 (tween 
   {:light {
-    :range (float (rand 50))
+    :range (float (+ 15 (rand 50)))
     :color (color (rand-vec 1.0 1.0 1.0))}} 
-    (the lamp) 0.5 :pow4)])
+    (the lamp) 1.0 :pow4)])
 
-'(ppexpand     (tween {
+(start-demo nil)
+
+#_(ppexpand     (tween {
       :scale (Vector3. 2.0 2.0 2.0)
       :position (v3+ (.position (.transform (the lamp))) 
                      (Vector3. 0.0 2.0 0.0))} (the lamp) 1.0 {:in :pow5}))
