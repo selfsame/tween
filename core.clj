@@ -5,16 +5,10 @@
     [System GC]
     MonoBehaviour IEnumerator WaitForSeconds Time Mathf)
   (:require 
-    [clojure.walk :as walk]
-    arcadia.repl
-  [clojure.pprint :as pprint] )
+    [clojure.walk :as walk])
   (:use 
-    pool
-    pdfn.core
-    arcadia.core
-    arcadia.linear
-    hard.core
-    hard.input))
+    tween.pool
+    arcadia.core))
 
 
 (defonce REGISTRY (atom {}))
@@ -310,17 +304,15 @@
   {:get (.* this >Light.range)
    :tag System.Single})
 
+'[tween.core]
 
-
-
-
-
-
+(comment 
 (defn pool-report [] 
   (pprint/print-table   (mapv #(do {:pool %1 :stats (try (stats %2) (catch Exception e :error))}) 
     (into '[<>WaitCursor <>TimeLineCursor <>TweenCursor]
       (map (comp :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))
     (into [<>WaitCursor <>TimeLineCursor <>TweenCursor]
-      (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY))))))
+      (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))))))
 
-(pool-report)
+
+
