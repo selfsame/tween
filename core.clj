@@ -100,9 +100,10 @@
   (let [sym (symbol (last (re-seq #"[^\.]+" (str tag))))
         once (gensym (str "_once_" sym))
         pair-sym (symbol (str "Pair-" sym))
+        qualified-pair-sym (symbol (str "tween.core.Pair-" sym))
         wm-f #(with-meta % {:tag tag :volatile-mutable true})
         pool-m (zipmap [:p :c :r] (map (comp symbol str) ["<>" "*" "!"] (repeat pair-sym)))
-        entry (conj methods {:pair {:tag pair-sym :pool pool-m}})]
+        entry (conj methods {:pair {:tag qualified-pair-sym :pool pool-m}})]
     
     `(do 
         (defonce ~once 
@@ -121,14 +122,15 @@
 (def-pool 1000 WaitCursor start initiated)
 
 (defn wait [n] 
-  (let [cursor (*WaitCursor 0 false)] 
+  (let [cursor (*WaitCursor (float 0) false)] 
     (fn [] 
       (when-not (.initiated cursor) 
         (set! (.initiated cursor) true)
         (set! (.start cursor) Time/time))
-      (if (pos? (- (+ (.start cursor) n) Time/time)) 
+      (if (pos? (- (+ (.start cursor) (float n)) Time/time)) 
         true
-        (!WaitCursor cursor)))))
+        (!WaitCursor cursor)
+        ))))
 
 
 
@@ -142,24 +144,6 @@
 (def <over> (*TimeLineCursor 0 false 0.0))
 
 (defn timeline [fns]
-  (assert (vector? fns) "timeline requires a vector")
-  (let [cnt (count fns)
-        ^MonoBehaviour coro-root (mono-obj)
-        ^TimeLineCursor cursor (*TimeLineCursor 0 false 0.0)]
-    (.StartCoroutine coro-root
-      (reify IEnumerator
-        (MoveNext [this]
-          (set! (.v cursor) 
-                (try ((get fns (.i cursor)))
-                     (catch Exception e false)))
-          (if (.v cursor) true
-            (if (<= (.i cursor) cnt) 
-                (set! (.i cursor) (inc (.i cursor)))
-                (!TimeLineCursor cursor))))
-        (get_Current [this] (.v cursor))))
-    (fn [] false)))
-
-(defn lazy-timeline [fns]
   (let [current (volatile! (first fns))
         fns (volatile! (rest fns))
         ^MonoBehaviour coro-root (mono-obj)
@@ -168,34 +152,51 @@
       (reify IEnumerator
         (MoveNext [this]
           (when-not panic
-            (set! (.v cursor) (@current))
-            (if (.v cursor) true
-              (if (do (vreset! current (first @fns) )
-                      (vswap! fns rest) @current)
-                true
-                (!TimeLineCursor cursor)))))
+            (try 
+              (set! (.v cursor) (@current))
+              (if (.v cursor) true
+                (if (do (vreset! current (first @fns) )
+                        (vswap! fns rest) @current)
+                  true
+                  (!TimeLineCursor cursor)
+                  ))
+              (catch Exception e false))))
         (get_Current [this] (.v cursor))))
     (fn [] (if @current true false))))
 
-(defn lazier-timeline [fns]
-  (let [fns (map #(%) fns)
-        current (volatile! (first fns))
-        fns (volatile! (rest fns))
+(defn timeline-1 [fns] (timeline (map #(%) fns)))
+
+(defn array-timeline [^|System.Object[]| fns]
+  (let [cnt (long (dec (count fns)))
         ^MonoBehaviour coro-root (mono-obj)
         ^TimeLineCursor cursor (*TimeLineCursor 0 false 0.0)]
     (.StartCoroutine coro-root
       (reify IEnumerator
         (MoveNext [this]
-          (when-not panic
-            (try (set! (.v cursor) (@current))
-              (if (.v cursor) true
-                (if (do (vreset! current (first @fns))
-                        (vswap! fns rest) @current)
-                    true
-                  (!TimeLineCursor cursor)))
-              (catch Exception e false))))
+          (set! (.v cursor) 
+                (try (((aget fns (.i cursor))))
+                     (catch Exception e (log e))))
+          (if (.v cursor) true
+            (if (< (.i cursor) cnt) 
+                (set! (.i cursor) (inc (.i cursor)))
+                (!TimeLineCursor cursor))))
         (get_Current [this] (.v cursor))))
-    (fn [] (if @current true false))))
+    (fn [] false)))
+
+(defmacro timeline* [& fns]
+  (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
+        ar (gensym)]
+    `(let [~ar (make-array ~'System.Object ~(count fns))] 
+      ~@(map-indexed #(list 'aset ar %1 (list 'fn [] %2)) fns)
+      (~'array-timeline ~ar))
+    ))
+
+(ppexpand 
+  (timeline* #(log "hello") 
+    (wait 0.5)
+
+
+     #(log "hello2")))
 
 
 
@@ -248,10 +249,12 @@
             (with-meta %3 {:tag (or (-> %2 :pair :tag) '*Pair-Object)}) 
             (list (or (-> %2 :pair :pool :c) '*Pair) (:identity %2) %4)) 
           tags tagmaps pairsyms targets)]
+
    `(~'let [~THIS ~o
-            ~cursor (~'*TweenCursor false ~'(float Time/time) ~(:duration opts) (float 0.0) (float 0.0))
-            ~@val-binds]
+          ~cursor (~'*TweenCursor false ~'(float Time/time) ~(:duration opts) (float 0.0) (float 0.0))
+          ~@val-binds]
       (~'fn []
+
         (~'when-not ~'(.initiated cursor) 
         ~'(set! (.initiated cursor) true)
         ~'(set! (.start cursor) (- Time/time (.overage <over>)) )
@@ -343,43 +346,33 @@
 (def run true)
 
 (defn hue [^UnityEngine.Material m ^UnityEngine.GameObject o]
-  (lazier-timeline (cycle [
-    (fn [] (wait (+ (rand) 0.3)))
-    (fn [] (tween {:material-color (UnityEngine.Color. (?f) (?f) (?f))} m 0.5 {:in :pow3}))
-    (fn [] (tween 
-      {:local {
-        :scale (Vector3. 2.0 2.0 2.0)
-        :position (v3+ (.position (.transform o)) 
-                       (Vector3. 0.0 2.0 0.0))}} o 1.0 {:in :pow5}))
-    ;(fn [] (wait (+ (rand) 0.1)))
-    (fn [] (tween {:material-color (UnityEngine.Color. 1 1 1)} m 0.5 {:in :pow3})) 
-    (fn [] (tween 
-     {:local {
-        :scale (Vector3. 1.0 1.0 1.0)
-        :position (v3+ (.position (.transform o)) 
-                      (Vector3. 0.0 0.0 0.0))}} o 0.5 :pow5))])))
+  (timeline-1
+    (cycle [
+      (fn [] (wait (+ (rand) 0.3)))
+      (fn [] (tween {:material-color (UnityEngine.Color. (?f) (?f) (?f))} m 0.5 {:in :pow3}))
+      (fn [] (tween 
+        {:local {
+          :scale (Vector3. 2.0 2.0 2.0)
+          :position (v3+ (.position (.transform o)) 
+                         (Vector3. 0.0 2.0 0.0))}} o 1.0 {:in :pow5}))
+      ;(fn [] (wait (+ (rand) 0.1)))
+      (fn [] (tween {:material-color (UnityEngine.Color. 1 1 1)} m 0.5 {:in :pow3})) 
+      (fn [] (tween 
+       {:local {
+          :scale (Vector3. 1.0 1.0 1.0)
+          :position (v3+ (.position (.transform o)) 
+                        (Vector3. 0.0 0.0 0.0))}} o 0.5 :pow5))])))
 
 
 (defn start-demo [_] 
   (clear-cloned!)
-  (dorun (for [x (range 20) 
-               z (range 20)
+  (dorun (for [x (range 13) 
+               z (range 13)
                :let [o (clone! :ball (V* (->v3 x 0 z) 2.0)) ]]
     (hue (.material (.GetComponent o UnityEngine.Renderer)) o))) )
 
-
-(defn fast-demo [_] 
-  (clear-cloned!)
-  (let [o-arr 
-        (into-array System.Object 
-          (for [x (range 20) z (range 20)
-            :let [o (clone! :ball (V* (->v3 x 0 z) 2.0)) ]] o))]
-    ) )
-
-(fast-demo nil)
-
-(lazy-timeline [ 
-(tween 
+'(timeline [
+  (tween 
   {:light {
     :range (float (+ 15 (rand 50)))
     :color (color (rand-vec 1.0 1.0 1.0))}} 
