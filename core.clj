@@ -23,10 +23,10 @@
 
 (def -mono-obj (volatile! nil))
 (defn mono-obj []
-  (or @-mono-obj
+  (if-not (null-obj? @-mono-obj) @-mono-obj
     (vreset! -mono-obj   
       (or (object-typed MonoBehaviour) 
-        (hook+ (GameObject. "tween.core/mono-obj") :start #'arcadia.core/log)))))
+          (hook+ (GameObject. "tween.core/mono-obj") :start #'arcadia.core/log)))))
 
 (defn every-frame [f]
   (let [coro-root (mono-obj)]
@@ -34,15 +34,6 @@
       (reify IEnumerator
         (MoveNext [this] (f))
         (get_Current [this])))))
-
-(def garbage (volatile! 0)) 
-(def garbage-active (volatile! true))
-(defn take-out-trash! [] 
-  (when (and @garbage-active (> (- Time/time @garbage) 0.7)) 
-        (.Enqueue arcadia.repl/work-queue 
-          ["(do (in-ns 'tween.core) (System.GC/Collect))" nil nil])
-        (vreset! garbage Time/time)) true)
-(defn wednesday [] (if (vswap! garbage-active not) (every-frame take-out-trash!)))
 
 
 (defn- datatype? [v] (or (sequential? v) (set? v) (map? v)))
@@ -80,10 +71,10 @@
 
 (defn map-paths 
   ([m] (map-paths [] m))
-  ([res m]
+  ([res m] 
     (if (map? m) 
-      (mapcat #(map-paths (conj res %) (get m %)) (keys m))
-      [[res m]])))
+        (mapcat #(map-paths (conj res %) (get m %)) (keys m))
+        [[res m]])))
 
 
 
@@ -124,13 +115,13 @@
 (defn wait [n] 
   (let [cursor (*WaitCursor (float 0) false)] 
     (fn [] 
-      (when-not (.initiated cursor) 
-        (set! (.initiated cursor) true)
-        (set! (.start cursor) Time/time))
-      (if (pos? (- (+ (.start cursor) (float n)) Time/time)) 
-        true
-        (!WaitCursor cursor)
-        ))))
+      (if (.initiated cursor)
+        (if (pos? (- (+ (.start cursor) (float n)) Time/time)) 
+          true
+          (!WaitCursor cursor))
+        (do 
+          (set! (.initiated cursor) true)
+          (set! (.start cursor) Time/time) true)))))
 
 
 
@@ -166,47 +157,41 @@
 
 (defn timeline-1 [fns] (timeline (map #(%) fns)))
 
-(defn array-timeline [^|System.Object[]| fns]
-  (let [cnt (long (dec (count fns)))
+(defn array-timeline [^clojure.lang.PersistentHashSet opts
+                      ^|System.Object[]|               fns]
+  (let [cnt (dec (.Length fns))
+        current (volatile! ((aget fns 0)))
         ^MonoBehaviour coro-root (mono-obj)
         ^TimeLineCursor cursor (*TimeLineCursor 0 false 0.0)]
     (.StartCoroutine coro-root
       (reify IEnumerator
         (MoveNext [this]
-          (set! (.v cursor) 
-                (try (((aget fns (.i cursor))))
-                     (catch Exception e (log e))))
-          (if (.v cursor) true
-            (if (< (.i cursor) cnt) 
-                (set! (.i cursor) (inc (.i cursor)))
-                (!TimeLineCursor cursor))))
+          (try 
+            (set! (.v cursor) (@current))
+            (if (.v cursor) true
+              (if (>= (.i cursor) cnt) 
+                  (if (opts :loop) 
+                    (do (set! (.i cursor) 0)
+                        (vreset! current ((aget fns 0))) true)
+                    (!TimeLineCursor cursor))
+                  (do (set! (.i cursor) (inc (.i cursor)))
+                      (vreset! current ((aget fns (.i cursor))))
+                      @current)))
+            (catch Exception e false)))
         (get_Current [this] (.v cursor))))
-    (fn [] false)))
+    (fn [] (.v cursor))))
 
 (defmacro timeline* [& fns]
   (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
         ar (gensym)]
-    `(let [~ar (make-array ~'System.Object ~(count fns))] 
+    `(~'let [~ar (~'make-array ~'System.Object ~(count fns))] 
       ~@(map-indexed #(list 'aset ar %1 (list 'fn [] %2)) fns)
-      (~'array-timeline ~ar))
-    ))
-
-(ppexpand 
-  (timeline* #(log "hello") 
-    (wait 0.5)
-
-
-     #(log "hello2")))
+      (~'array-timeline ~opts ~ar))))
 
 
 
 
-(def seconds (volatile! 0))
 
-'(lazier-timeline 
-  (cycle [
-    (fn [] (wait (rand 5)))
-    (fn [] (lazy-timeline (map #(fn [] (log %)) "dog")))]))
 
 
 
@@ -257,7 +242,7 @@
 
         (~'when-not ~'(.initiated cursor) 
         ~'(set! (.initiated cursor) true)
-        ~'(set! (.start cursor) (- Time/time (.overage <over>)) )
+        ;~'(set! (.start cursor) (- Time/time (.overage <over>)) )
         ~@(map #(list 'set! (list '.a %1) %2) pairsyms getters))
         ~'(set! (.now cursor) (- Time/time (.start cursor)))
         ~'(set! (.ratio cursor) 
@@ -273,7 +258,7 @@
           true
           (~'do 
             ~@(map #(list (or (-> %1 :pair :pool :r) '!Pair-Object) %2) tagmaps pairsyms)
-            ~'(set! (.overage <over>) (float (- (.now cursor) (.duration cursor))))
+            ;~'(set! (.overage <over>) (- (.now cursor) (.duration cursor)))
             ~'(!TweenCursor cursor)
             ;~'(set! (.initiated cursor) false)
             ))))))
@@ -331,7 +316,6 @@
 
 
 
-
 (defn pool-report [] 
   (pprint/print-table   (mapv #(do {:pool %1 :stats (try (stats %2) (catch Exception e :error))}) 
     (into '[<>WaitCursor <>TimeLineCursor <>TweenCursor]
@@ -340,48 +324,3 @@
       (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY))))))
 
 (pool-report)
-
-
-
-(def run true)
-
-(defn hue [^UnityEngine.Material m ^UnityEngine.GameObject o]
-  (timeline-1
-    (cycle [
-      (fn [] (wait (+ (rand) 0.3)))
-      (fn [] (tween {:material-color (UnityEngine.Color. (?f) (?f) (?f))} m 0.5 {:in :pow3}))
-      (fn [] (tween 
-        {:local {
-          :scale (Vector3. 2.0 2.0 2.0)
-          :position (v3+ (.position (.transform o)) 
-                         (Vector3. 0.0 2.0 0.0))}} o 1.0 {:in :pow5}))
-      ;(fn [] (wait (+ (rand) 0.1)))
-      (fn [] (tween {:material-color (UnityEngine.Color. 1 1 1)} m 0.5 {:in :pow3})) 
-      (fn [] (tween 
-       {:local {
-          :scale (Vector3. 1.0 1.0 1.0)
-          :position (v3+ (.position (.transform o)) 
-                        (Vector3. 0.0 0.0 0.0))}} o 0.5 :pow5))])))
-
-
-(defn start-demo [_] 
-  (clear-cloned!)
-  (dorun (for [x (range 13) 
-               z (range 13)
-               :let [o (clone! :ball (V* (->v3 x 0 z) 2.0)) ]]
-    (hue (.material (.GetComponent o UnityEngine.Renderer)) o))) )
-
-'(timeline [
-  (tween 
-  {:light {
-    :range (float (+ 15 (rand 50)))
-    :color (color (rand-vec 1.0 1.0 1.0))}} 
-    (the lamp) 1.0 :pow4)])
-
-(start-demo nil)
-
-#_(ppexpand     (tween {
-      :scale (Vector3. 2.0 2.0 2.0)
-      :position (v3+ (.position (.transform (the lamp))) 
-                     (Vector3. 0.0 2.0 0.0))} (the lamp) 1.0 {:in :pow5}))
-
