@@ -11,6 +11,9 @@
 (defonce THIS (gensym 'this))
 (def panic false)
 
+(def ^System.Single -single (float 0.0))
+(def ^System.Int32  -short  (int 0))
+
 (def -mono-obj 
   (let [_ (UnityEngine.Object/Destroy (GameObject/Find "tween.core/-mono-obj")) 
         o (GameObject. "tween.core/-mono-obj")] 
@@ -75,11 +78,12 @@
         methods)))
     `~path))
 
+(defn unqualify [s] (last (re-seq #"[^\.]+" (str s))))
 (defn var->qualified-symbol [v] (symbol (last (re-find #"^#'(.*)" (str v)))))
 
 (defmacro deftag [tag methods]
   (let [nss (str *ns*)
-        sym (symbol (last (re-seq #"[^\.]+" (str tag))))
+        sym (symbol (unqualify tag))
         pair-sym (symbol (str "Pair-" sym))
         wm-f #(with-meta % {:tag tag :volatile-mutable true})
         [T P C R] (map (comp symbol str) [nss nss nss nss] ["." "/" "/" "/"] ["" "<>" "*" "!"] (repeat pair-sym))
@@ -178,12 +182,12 @@
 
 
 
-(deftag System.Object       {:lerp (fn [a b _] b)                     :identity (System.Object)})
-(deftag System.Single       {:lerp Mathf/Lerp                         :identity (float 0.0)})
-(deftag System.Double       {:lerp Mathf/Lerp                         :identity (double 0.0)})
-(deftag UnityEngine.Vector3 {:lerp UnityEngine.Vector3/Lerp           :identity (UnityEngine.Vector3.)})
-(deftag UnityEngine.Color   {:lerp UnityEngine.Color/Lerp             :identity (UnityEngine.Color.)})
-
+(deftag System.Object          {:lerp (fn [a b _] b)                        :identity (System.Object)})
+(deftag System.Single          {:lerp Mathf/Lerp                            :identity (float 0.0)})
+(deftag System.Double          {:lerp Mathf/Lerp                            :identity (double 0.0)})
+(deftag UnityEngine.Vector3    {:lerp UnityEngine.Vector3/Lerp              :identity (UnityEngine.Vector3.)})
+(deftag UnityEngine.Color      {:lerp UnityEngine.Color/Lerp                :identity (UnityEngine.Color.)})
+(deftag UnityEngine.Quaternion {:lerp UnityEngine.Quaternion/LerpUnclamped  :identity (UnityEngine.Quaternion.)})
 
 
 
@@ -208,6 +212,7 @@
 
 (defmacro tween [m o & more]
   (let [opts      (args->opts more)
+        ratio-code '(Mathf/InverseLerp 0.0 (.duration cursor) (.now cursor))
         easefn    (apply (partial compile-ease '(.ratio cursor))  ((juxt :in :out) opts))
         cursor    (with-meta 'cursor {:tag TweenCursor} )
         paths     (map-paths m)
@@ -215,7 +220,17 @@
                     (map (juxt (comp @tween.core/REGISTRY first) last) paths))
         props     (map (comp (juxt :tag :get) first) prop-data)
         tags      (map first props)
+       -bases     (map (comp (juxt :base :base-tag) first) prop-data)
+        basemap   
+        (into {} 
+          (map 
+            (fn [[code tag]]
+              {code (if tag (with-meta (gensym (unqualify tag)) {:tag tag}) (gensym 'base))}) 
+            (set (remove (comp nil? first) -bases))))
+        bases     (map (comp basemap first) -bases)
+        base-binds (mapcat (juxt last first) basemap)
         getters   (map last props)
+        base-getters   (map (fn [b g] (if b (symbol-replace g {THIS b}) g)) bases getters)
         tagmaps   (map @REGISTRY tags)
         defaults  (map :identity tagmaps)
         targets   (mapv last prop-data)
@@ -228,77 +243,98 @@
           tags tagmaps pairsyms targets)]
 
    `(~'let [~THIS ~o
-          ~cursor (*TweenCursor false ~'(float Time/time) ~(:duration opts) (float 0.0) (float 0.0))
+          ~cursor (*TweenCursor false ~'Time/time (float ~(:duration opts)) -single -single)
+          ~@base-binds
           ~@val-binds]
       (~'fn []
-
         (~'when-not ~'(.initiated cursor) 
         ~'(set! (.initiated cursor) true)
-        ;~'(set! (.start cursor) (- Time/time (.overage <over>)) )
-        ~@(map #(list 'set! (list '.a %1) %2) pairsyms getters))
+        ~@(map #(list 'set! (list '.a %1) %2) pairsyms base-getters))
         ~'(set! (.now cursor) (- Time/time (.start cursor)))
-        ~'(set! (.ratio cursor) 
-                (float (Mathf/InverseLerp 0.0 (.duration cursor) (.now cursor))))
+        (~'set! ~'(.ratio cursor) ~ratio-code)
       ~@(map
-         #(list 'set! (:get (first %1)) 
+         #(list 'set! %1
             (list (:lerp %2)
               (list '.a (get pairsyms %3))
               (list '.b (get pairsyms %3))
-              easefn))
-        prop-data tagmaps (range 100))
+              easefn ))
+        base-getters tagmaps (range 100))
         (~'if ~'(< (.now cursor) (.duration cursor))
           true
           (~'do 
             ~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms)
-            ;~'(set! (.overage <over>) (- (.now cursor) (.duration cursor)))
-            (!TweenCursor ~'cursor)
-            ;~'(set! (.initiated cursor) false)
-            ))))))
+            (!TweenCursor ~'cursor)))))))
 
 
 
 
 (deftween [:position] [this]
-  {:get (.position (.transform this))
+  {:get  (.position this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
    :tag UnityEngine.Vector3})
 
 (deftween [:local :position] [this]
-  {:get (.localPosition (.transform this))
+  {:get (.localPosition this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
    :tag UnityEngine.Vector3})
 
 (deftween [:local :scale] [this]
-  {:get (.localScale (.transform this))
+  {:get (.localScale this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
    :tag UnityEngine.Vector3})
 
 (deftween [:scale] [this]
-  {:get (.scale (.transform this))
+  {:get (.localScale this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
    :tag UnityEngine.Vector3})
 
+(deftween [:rotation] [this]
+  {:get (.rotation this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Quaternion})
+
+(deftween [:local :rotation] [this]
+  {:get (.localRotation this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Quaternion})
+
 (deftween [:euler] [this]
-  {:get (.eulerAngles (.transform this))
+  {:get (.eulerAngles this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
    :tag UnityEngine.Vector3})
 
 (deftween [:local :euler] [this]
-  {:get (.localEulerAngles (.transform this))
+  {:get (.localEulerAngles this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
    :tag UnityEngine.Vector3})
 
-(deftween [:material-color] [this]
-  {:get (.color this)
-   :tag UnityEngine.Color})
-
 (deftween [:material :color] [this]
-  {:get (.color (.material (.GetComponent this UnityEngine.Renderer)))
+  {:base (.material (.GetComponent this UnityEngine.Renderer))
+   :base-tag UnityEngine.Material
+   :get (.color this)
    :tag UnityEngine.Color})
 
 (deftween [:light :color] [this]
-  {:get (.* this >Light.color)
+  {:base (.GetComponent this UnityEngine.Light)
+   :get (.color this)
    :tag UnityEngine.Color})
 
 (deftween [:light :range] [this]
-  {:get (.* this >Light.range)
+  {:base (.GetComponent this UnityEngine.Light)
+   :get (.range this)
    :tag System.Single})
 
 '[tween.core]
+
+
 
 (comment 
 (defn pool-report [] 
