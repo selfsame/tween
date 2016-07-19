@@ -43,7 +43,7 @@ returns fn that returns true for the duration after it's first invokation
 
 ## `deftag` macro
 
-Registers a type for tweening
+Registers a type for tweening.  
 
 ```clj
 (deftag       UnityEngine.Vector3 
@@ -53,25 +53,30 @@ Registers a type for tweening
 
 ## `deftween` macro
 
-register an edn path with property access. The path is arbitrary and the base object is user provided on usage.
-
 ```clj
-(deftween [:local :scale] [this]
-  {:get (.localScale (.transform this))
-   :tag UnityEngine.Vector3})
+(deftween [:material :color] [this]
+  {:get (.color this)
+   :tag UnityEngine.Color
+   :base (.material (.GetComponent this UnityEngine.Renderer))
+   :base-tag UnityEngine.Material})
 ```
+
+register an edn path as a tween. The path is arbitrary and the symbol binding will be to a user provided object.
+*  `arg-1` edn path
+*  `arg-2` vector with symbol used in getter code 
+*  `arg-3` map with:
+  *  `:tag` qualified type of property (should be registered with deftag)
+  *  `:get` code to get tweenable property
+  *  `:base` optional getter for derived object 
+  *  `:base-tag` optional type-hint for base object
+
+
+
+
 
 ## `tween` macro
 
-Expands into a fn that returns true for the duration after it's first invokation. 
-
-*  `arg-1`  map of target values
-*  `arg-2`  object reference
-*  `arg-3`  duration
-*  `& more` compile into opt map
-
-The target map is exploded into paths, a path registered with `deftween` will expand into code.
-
+Expands into a fn that returns true for the duration after it's first invokation. The target map is exploded into paths, a path registered with `deftween` will expand into code.
 
 ```clj
 (tween 
@@ -81,6 +86,14 @@ The target map is exploded into paths, a path registered with `deftween` will ex
   (GameObject.) 
   2.5 {:in :pow5})
 ```
+
+*  `arg-1`  map of target values
+*  `arg-2`  object reference
+*  `arg-3`  duration
+*  `& more` compile into opt map
+
+
+
 
 ### easing fns
 
