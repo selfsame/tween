@@ -1,6 +1,8 @@
 # tween.core
 A fast tween library for arcadia/Unity
 
+![tween core](https://cloud.githubusercontent.com/assets/2467644/16961321/fa3d3c82-4dba-11e6-8c8c-4a81006844f1.gif)
+
 ## timelines
 
 
@@ -14,7 +16,7 @@ A fast tween library for arcadia/Unity
 ```
 
 
-`timeline-1` uses another fn layer to provide an initialization closure.
+`timeline-1` uses another fn layer to provide an initialization closure. This closure is needed to repeat `wait` and `tween` fns.
 
 ```clj
 (timeline-1 
@@ -23,7 +25,7 @@ A fast tween library for arcadia/Unity
     (fn [] #(log 'tick)])))
 ```
 
-`timeline*` macro wrapps forms with `(fn [])`, and uses an Array for performance. Keywords are removed for options. `:loop` cycles the iterator.
+`timeline*` macro wraps forms with `(fn [])`, and uses an Array for performance. Keywords are removed for options. `:loop` cycles the iterator.
 
 ```clj
 (timeline* :loop
@@ -43,7 +45,7 @@ returns fn that returns true for the duration after it's first invokation
 
 ## `deftag` macro
 
-Registers a type for tweening.  
+Registers a type for tweening.  An internal `Pair-Foo` class will be defined.
 
 ```clj
 (deftag       UnityEngine.Vector3 
