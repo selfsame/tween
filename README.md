@@ -1,130 +1,103 @@
-# tween
+# tween.core
 A fast tween library for arcadia/Unity
 
-![tween example](http://selfsamegames.com/gifs/img/bubb23.gif)
+## timelines
 
-This is still experimental, feedback on overall design is welcome.
 
-## implementation
+`timeline` starts a coroutine that iterates a `seq?` collection. Items are invoked every frame and lazily iterate when falsey. 
 
-* Tweening is implemented as a component for each tweenable property, this avoids garbage collection allowing high fps.  A tween channel will reuse an existing component, for best performance attach tweens to an object before cloning in game.
-* A proxy ```<Tween>``` type stores the specific values of a tween configuration, and can be used as a fn on gameobjects to initiate a tween.
-* each property channel has a constructor to create a proxy ```<Tween>```. ```scale``` is the constructor fn for the ```scale_tween``` component.
-
-# usage
 ```clj
-(ns test.core
-  (:require [tween.core :as tween]))
-
-;defining a <Tween> via a constructor fn
-(def my-move (tween/position (Vector3. -4 0 0) 2.5 :+))
-
-;applying a <Tween> on an object
-(my-move (GameObject.))
-```
-
-## constructor args
-A constructor takes a target value, and optional args with no order:
-  * ```{}``` A map to merge with found options
-  * ```0.7``` A float - ```{:duration 0.7}```
-  * ```:+``` relative tween flag - ```{:+ true}```
-  * ```:pow2 :pow3 :pow4 :pow5``` easing shorthand for same in and out - ```{:in :pow2 :out :pow2}```
-  * ```#(%)``` a fn - ```{:callback (atom [#(%)])}```
-
-# Tweens are semi-associative
-```clj
-(def z (tween/euler (Vector3. 45 0 100) 0.5))
-(def y (assoc z :duration 1.2))
-(= z y) ;false
-
-(:duration z)
-;0.5
-```
-
-# Tweens are sort of functions
-```clj
-(my-tween my-game-object)
-(map my-tween my-col)
+(timeline [
+ #(log "hello")
+  (wait 1.0)
+ #(log "goodbye")])
 ```
 
 
-# callbacks/chained tweens
-
-A Tween has an internal atom of callbacks. They are called after the tween has finished, and should take 1 arg - the gameobject the tween was attached to.
-
-Callbacks can be added to the opts with ```:callback```. A fn in the constructor also works.
+`timeline-1` uses another fn layer to provide an initialization closure.
 
 ```clj
-(def cb 
-  (tween/position 
-    (Vector3. 0 0 0) 0.5 
-    (fn [go] (UnityEngine.Debug/Log (str "tween ended for " go)))))
+(timeline-1 
+  (cycle [
+    (fn [] (wait (rand)))
+    (fn [] #(log 'tick)])))
 ```
 
-```<Tweens>``` are suitable callbacks
-```clj
-(def b (tween/position (Vector3. 0 0 0) 0.5))
-(def a (tween/position (Vector3. 0 -2 0) 0.5 b))
-```
-
-Callbacks can be also be configured with ```link! unlink! links```
-```clj
-(link! a b a)
-(link! b z y)
-;a - b - a - CYCLE
-;       \ z - y
-```
-
-
-## currently provided tweens (```tween.core```)
-```
-position 
-scale
-euler 
-material-color 
-text-color 
-light-color 
-light-range 
-material-texture-offset
-```
-
-
-# custom tweens
-You can define new tween properties with the ```deftween``` macro.
-
-```-get``` and ```-value``` are the basic required methods
-```clj
-(tween/deftween camera-size [^float value ^float target]
-  (-get [this] (.fieldOfView (.GetComponent this "Camera")))
-  (-value [this] (float (+ value (* (- target value) (.ratio this))))))
-
-((camera-size 45 5.0 ) (UnityEngine.Camera/main))
-```
-
-The ```value``` and ```target``` prop args must be defined.
-
-The macro will also define hinted props for 
-```^boolean active ^float delay ^float start ^float duration ^boolean relative ^float ratio ^int uid```
-as well as non-serialziable props for ```getfn addfn easefn``` which hold clojure fn's
-
-To allow relative tweening, you must provide an ```-add``` method (it defaults to Vector3/op_Addition)
+`timeline*` macro wrapps forms with `(fn [])`, and uses an Array for performance. Keywords are removed for options. `:loop` cycles the iterator.
 
 ```clj
-(deftween text-color [^Color value ^Color target]
-  (-add [a b] (Color/op_Addition a b))
-  (-get [this] (.color (.GetComponent this "TextMesh")))
-  (-value [this] (Color/Lerp (.value this) (.target this) (.ratio this))))
- ```
+(timeline* :loop
+  (wait 0.5)
+  (tween {:local {:scale (->v3 (rand))}} 
+   (the ball) 0.9))
+```
 
-Setting the tween value defaults to the form ```(set! ~-get ~-value)```. If a different form is needed, you can also define a ```-set``` method (note the -value method is now unused)
+### wait
+
+`(wait 0.5)`
+
+returns fn that returns true for the duration after it's first invokation
+
+
+## tweens
+
+## `deftag` macro
+
+Registers a type for tweening.  
 
 ```clj
- (deftween material-texture-offset [^Vector2 value ^Vector2 target] 
-  (-get [this] (.GetTextureOffset (.material (.GetComponent this UnityEngine.Renderer) "_MainTex")))
-  (-add [a b] (Vector2/op_Addition a b))
-  (-set [this] (.SetTextureOffset (.material (.GetComponent this UnityEngine.Renderer)) 
-                                  "_MainTex" 
-                                  (Vector2/Lerp (.value this) (.target this) (.ratio this)))))
- ```
+(deftag       UnityEngine.Vector3 
+  {:lerp      UnityEngine.Vector3/Lerp           
+   :identity  (UnityEngine.Vector3.)})
+```
+
+## `deftween` macro
+
+```clj
+(deftween [:material :color] [this]
+  {:get (.color this)
+   :tag UnityEngine.Color
+   :base (.material (.GetComponent this UnityEngine.Renderer))
+   :base-tag UnityEngine.Material})
+```
+
+register an edn path as a tween. The path is arbitrary and the symbol binding will be to a user provided object.
+*  `arg-1` edn path
+*  `arg-2` vector with symbol used in getter code 
+*  `arg-3` map with:
+  *  `:tag` qualified type of property (should be registered with deftag)
+  *  `:get` code to get tweenable property
+  *  `:base` optional getter for derived object 
+  *  `:base-tag` optional type-hint for base object
 
 
+
+
+
+## `tween` macro
+
+Expands into a fn that returns true for the duration after it's first invokation. The target map is exploded into paths, a path registered with `deftween` will expand into code.
+
+```clj
+(tween 
+ {:local 
+   {:scale (Vector3. 2.0 2.0 2.0)
+    :position (Vector3. 0.0 2.0 0.0)}}  
+  (GameObject.) 
+  2.5 {:in :pow5})
+```
+
+*  `arg-1`  map of target values
+*  `arg-2`  object reference
+*  `arg-3`  duration
+*  `& more` compile into opt map
+
+
+
+
+### easing fns
+
+`{:in :pow3}`
+
+*  keys `:in` `:out`
+*  vals `:pow2` `:pow3` `:pow4` `:pow5` `nil`

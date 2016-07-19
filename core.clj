@@ -1,245 +1,346 @@
 (ns tween.core
-  (:require arcadia.core clojure.string)
-  (:use tween.protocols)
-  (:import [UnityEngine Color Vector3 GameObject Color]))
+  (:import Vector3 
+    [UnityEngine HideFlags GameObject Color Vector4 Vector3 Vector2 Quaternion MonoBehaviour WaitForSeconds Time Mathf]
+    [System GC Object]
+    [System.Collections IEnumerator])
+  (:require 
+    [clojure.walk :as walk])
+  (:use tween.pool))
 
+(defonce REGISTRY (atom {}))
+(defonce THIS (gensym 'this))
+(def panic false)
 
-(defn- -V+ [^Vector3 a ^Vector3 b] (Vector3/op_Addition a b))
+(def ^System.Single -single (float 0.0))
+(def ^System.Int32  -short  (int 0))
 
-(def ^:private UID (atom 0))
-(def REGISTRY (atom {}))
-(declare callable?)
+(def -mono-obj 
+  (let [_ (UnityEngine.Object/Destroy (GameObject/Find "tween.core/-mono-obj")) 
+        o (GameObject. "tween.core/-mono-obj")] 
+    (set! (.hideFlags o) HideFlags/HideInHierarchy)
+    (.AddComponent o UnityEngine.MonoBehaviour)))
 
- 
-(defn finish [uid c]
-  (when-let [f (get @REGISTRY uid)]
-    ;(swap! REGISTRY dissoc uid)
-    (mapv #(when (callable? %) (% c)) f))) 
+(defn every-frame [f]
+  (let [coro-root -mono-obj]
+    (.StartCoroutine coro-root
+      (reify IEnumerator
+        (MoveNext [this] (f))
+        (get_Current [this])))))
 
-(def ^:private easing 
-  {:pow2 (fn [r] (* r r))
-    :pow3 (fn [r] (* r r r))
-    :pow4 (fn [r] (* r r r r))
-    :pow5 (fn [r] (* r r r r r))
-  :in (fn [f r] (f r))
-  :out (fn [f r] (- 1 (f (- 1 r))))
-  :inout (fn [fin fout r]
-          (cond (< r 0.5) (/ (fin (* 2 r)) 2)
-                  :else (- 1 (/ (fout (* 2 (- 1 r))) 2))))})
+(defn- datatype? [v] (or (sequential? v) (set? v) (map? v)))
 
-(def ^:private easeregistry
-  (into {}
-  (for [in [nil :pow2 :pow3 :pow4 :pow5]
-      out [nil :pow2 :pow3 :pow4 :pow5]
-      :let [infn (get easing in) 
-            outfn (get easing out)]]
-      (cond (= [in out] [nil nil]) {[in out] #(identity %)}
-        (= out nil) {[in out] (fn [r] ((:in easing) infn r))}
-        (= in nil) {[in out] #((:out easing) outfn %)}
-        :else {[in out] #((:inout easing) infn outfn %)}
+(defn- symbol-replace [form xform]
+  (cond (symbol? form)   (get xform form form)
+        (datatype? form) (clojure.walk/walk #(symbol-replace % xform) identity form)
+        :else form))
 
-        ))))
+(defmacro pow2 [a] `(Mathf/Pow ~a 2))
+(defmacro pow3 [a] `(Mathf/Pow ~a 3))
+(defmacro pow4 [a] `(Mathf/Pow ~a 4))
+(defmacro pow5 [a] `(Mathf/Pow ~a 5))
 
+(def quote-ease {
+  :pow2   'pow2
+  :pow3   'pow3
+  :pow4   'pow3
+  :pow5   'pow3
+  :linear 'n
+  :in     '(i n)
+  :out    '(- 1 (o (- 1 n)))
+  :inout  '(if (< n 0.5) 
+             (/ (i (* 2 n)) 2)
+             (- 1 (/ (o (* 2 (- 1 n))) 2)))})
 
+(defn compile-ease [rsym ik ok]
+  (let [[i o] (mapv quote-ease [ik ok])
+         bk (cond (every? nil? [o i]) :linear
+                 (nil? o) :in 
+                 (nil? i) :out
+                 :else    :inout)
+         b (get quote-ease bk)]
+       (symbol-replace b {'n rsym 'i i 'o o})))
 
-
-
-
-(deftype Tween [^System.MonoType component opts callbacks]
-  clojure.lang.IObj
-  (ToString [this] (str "" component "|" (:duration opts)))
-  (meta [this] (meta opts))
-
-  clojure.lang.ILookup
-  (valAt [_ k] (if (= k :callback) @callbacks (get opts k)))
-  (valAt [_ k nf] (if (= k :callback) @callbacks (get opts k nf)))
-
-
-  clojure.lang.Associative
-  (assoc [this k v]
-    (if (= k :callback)
-      (do (reset! callbacks v) (if (sequential? this) this [this]))
-      (Tween. component (assoc opts k v) (atom @callbacks))))
-
-  clojure.lang.IPersistentCollection
-  (equiv [self o]
-    (if (instance? Tween o)
-      (and (= component (.component o))
-         (= opts (.opts o))
-         (= @callbacks @(.callbacks o)))
-      false))
-
-  tween.protocols.Chainable
-  (-link! [a b] 
-    (when (callable? b)
-          (swap! (.callbacks a) #(vec (conj (set %) b))))
-          b)
-  (-unlink! [a b]
-    (if (or (instance? Tween b) (instance? clojure.lang.IFn b))
-      (swap! (.callbacks a) #(vec (disj (set %) b)))))
-  (-links [a] (.callbacks a))
-
-  clojure.lang.IFn
-  (invoke [this go] 
-    (let [pre-c (.GetComponent go component) 
-        c (or pre-c (.AddComponent go component))]
-      (set! (.active c) true)
-      (set! (.value c) (.target c))
-      (if pre-c 
-        (do (set! (.value c) ((.getfn c) go)))
-        (do (set! (.value c)  ((.getfn c) go))))
-
-      (set! (.uid c) (int (swap! UID inc)))
-      (if @callbacks
-        (swap! REGISTRY conj {(.uid c) @callbacks})
-        (swap! REGISTRY dissoc (.uid c)))
-      
-      (set! (.start c) (- (+ (UnityEngine.Time/time) (:delay opts)) (.delay c)))
-      (set! (.duration c) (:duration opts))
-      (set! (.delay c) 0.0)
-
-      (if (:+ opts) 
-        (do ;(set! (.relative c) true)
-            (set! (.target c) ((.addfn c) (.value c) (:target opts))))
-        (set! (.target c) (:target opts)))
-      (when-not (= (.easesig c) [(:in opts) (:out opts)]) 
-        (set! (.easesig c) [(:in opts) (:out opts)])
-        (set! (.easefn c) (get easeregistry [(:in opts)(:out opts) ])))
-      go)))
-
-(defn callable? [x] (if 
-  (or (instance? Tween x) (fn? x)) true false))
-
-(defn links [a] (when (instance? Tween a) (-links a)))
-(defn unlink! [a b] (-unlink! a b))
-(defn link! [a b & more]
-  (when b
-    (when (instance? Tween a)
-      (-link! a b)
-      (when more (apply link! (cons b more))))))
+(defn map-paths 
+  ([m] (map-paths [] m))
+  ([res m] 
+    (if (map? m) 
+        (mapcat #(map-paths (conj res %) (get m %)) (keys m))
+        [[res m]])))
 
 
 
-(defn make [c target & more]
-  (let [args (conj {:target target :duration 1.0 :+ false :callback nil :delay 0.0}
-        (into {} (mapv 
-          #(cond 
-            (= :+ %) {:+ true}
-            (number? %) {:duration %}
-            (map? %) %
-            (#{:pow2 :pow3 :pow4 :pow5} %) {:in % :out %}
-            (callable? %) {:callback [%]}) 
-        more)))
-        ]
-  (Tween. c (dissoc args :callback) (atom (:callback args)))))
 
+(defmacro deftween [path props methods]
+  (let [this (first props)]
+    (swap! REGISTRY assoc path 
+      (into {} (map 
+        (juxt first (comp (comp #(symbol-replace % {this THIS}) last))) 
+        methods)))
+    `~path))
 
-(defn- sort-methods [code]
-  (if (sequential? code)
-    (case (first code)
-      -get {:getter (rest code)}
-      -set {:setter (rest code)}
-      -value {:valuer (rest code)}
-      -add {:adder (cons 'fn (rest code))}
-      -subtract {:subtractor (cons 'fn (rest code))}
-      {}) {}))
+(defn unqualify [s] (last (re-seq #"[^\.]+" (str s))))
+(defn var->qualified-symbol [v] (symbol (last (re-find #"^#'(.*)" (str v)))))
 
-(def ^{:private true} default-methods 
-  {:getter [['this] ()]
-    :valuer [['this] ()]
-    :setter nil
-    :adder '(fn [a b] (Vector3/op_Addition a b))
-    :subtractor '(fn [a b] (Vector3/op_Subtraction a b))
-    })
-
-(defmacro deftween [sym props & methods ] ;getter valuer & setter
-  (let [{:keys [getter valuer setter adder]} (conj default-methods (into {} (map sort-methods methods)))
-        compsym (symbol (str sym "_tween"))
-        res-props (concat '[^boolean active ^System.Double delay ^System.Double start ^System.Double duration ^boolean relative ^float ratio ^int uid
-                           getfn addfn easefn easesig] props)
-        [[this] get-more] getter
-        [[this-v] value-more] valuer
-        getterfn (cons 'fn getter)
-        set-more (or setter (list 'set! get-more value-more))]
-`(do
-
-  (arcadia.core/defcomponent ~compsym ~res-props
-   (~'Awake [~this]
-      (set! (.getfn ~this) ~getterfn)
-      (set! (.addfn ~this) ~adder)
-      (set! (.duration ~this) 5.0)
-      (set! (.start ~this) (UnityEngine.Time/time))
-      (set! (.value ~this) ~get-more)
-      (set! (.target ~this) ~get-more))
-   (~'Update [~this-v]
-
-      (if (.active ~this-v)
-            (if  (> (- (UnityEngine.Time/time) (.start ~this-v)) 
-                    (.duration ~this-v))
-
-              (do (set! (.ratio ~this-v) (float 1.0))
-                ~set-more
-                (set! (.active ~this-v) false)
-                (set! (.delay ~this-v) 
-                  (- (- (UnityEngine.Time/time) (.start ~this-v)) 
-                     (.duration ~this-v)))
-                (tween.core/finish (.uid ~this-v) (.gameObject ~this-v)))
-              
-              (do
-                (set! (.ratio ~this-v) 
-                  (float ((.easefn ~this)
-                   (/ (- (UnityEngine.Time/time) (.start ~this-v)) 
-                      (.duration ~this-v)) )))
-                 ~set-more)) ))
-  (~'OnDestroy [~'this]
-      (swap! tween.core/REGISTRY dissoc (.uid ~'this))))
-
-  (defn ~sym ~'[& more] (apply tween.core/make (cons ~compsym ~'more)))
-
-)))
-
- 
- 
-
-
-(deftween position [^Vector3 value ^Vector3 target]
-  (-get [this] (.position (.transform this)))
-  (-value [this] (Vector3/Lerp value target (.ratio this))))
-
-(deftween scale [^Vector3 value ^Vector3 target]
-  (-get [this] (.localScale (.transform this)))
-  (-value [this] (Vector3/Lerp (.value this) (.target this) (.ratio this))))
-
-(deftween euler [^Vector3 value ^Vector3 target]
-  (-get [this] (.eulerAngles (.transform this)))
-  (-value [this] (Vector3/Lerp (.value this) (.target this) (.ratio this))))
-
-(deftween material-color [^Color value ^Color target]
-  (-add [a b] (Color/op_Addition a b))
-  (-get [this] (.color (.material (.GetComponent this UnityEngine.Renderer))))
-  (-value [this] (Color/Lerp (.value this) (.target this) (.ratio this))))
-
-(deftween text-color [^Color value ^Color target]
-  (-add [a b] (Color/op_Addition a b))
-  (-get [this] (.color (.GetComponent this "TextMesh")))
-  (-value [this] (Color/Lerp (.value this) (.target this) (.ratio this))))
-
-(deftween light-color [^Color value ^Color target]
-  (-add [a b] (Color/op_Addition a b))
-  (-get [this] (.color (.GetComponent this "Light")))
-  (-value [this] (Color/Lerp (.value this) (.target this) (.ratio this))))
-
-(deftween light-range [^float value ^float target]
-  (-get [this] (.range (.GetComponent this "Light")))
-  (-value [this] (float (+ value (* (- target value) (.ratio this))))))
-
-(deftween material-texture-offset [^Vector2 value ^Vector2 target] 
-  (-get [this] (.GetTextureOffset (.material (.GetComponent this UnityEngine.Renderer) "_MainTex")))
-  (-value [this] )
-  (-set [this] (.SetTextureOffset (.material (.GetComponent this UnityEngine.Renderer)) 
-                                  "_MainTex" 
-                                  (Vector2/Lerp (.value this) (.target this) (.ratio this)))))
+(defmacro deftag [tag methods]
+  (let [nss (str *ns*)
+        sym (symbol (unqualify tag))
+        pair-sym (symbol (str "Pair-" sym))
+        wm-f #(with-meta % {:tag tag :volatile-mutable true})
+        [T P C R] (map (comp symbol str) [nss nss nss nss] ["." "/" "/" "/"] ["" "<>" "*" "!"] (repeat pair-sym))
+        entry (conj methods {:pair {:tag T :vars {:p P :c C :r R}}})]
+    
+    `(do 
+      (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)])
+     ~(do (swap! REGISTRY assoc tag entry) true)
+      (def-pool 10000 ~pair-sym ~'a ~'b)
+      (quote ~entry))))
 
 
 
- 
+(deftype WaitCursor [
+  ^:volatile-mutable ^System.Single start 
+  ^:volatile-mutable ^boolean       initiated])
+
+(def-pool 1000 WaitCursor start initiated)
+
+(defn wait [n] 
+  (let [cursor (*WaitCursor (float 0) false)] 
+    (fn [] 
+      (if (.initiated cursor)
+        (if (pos? (- (+ (.start cursor) (float n)) Time/time)) 
+          true
+          (!WaitCursor cursor))
+        (do 
+          (set! (.initiated cursor) true)
+          (set! (.start cursor) Time/time) true)))))
+
+
+
+(deftype TimeLineCursor [
+  ^:volatile-mutable ^System.Int32    i 
+  ^:volatile-mutable ^boolean         v])
+
+(def-pool 1000 TimeLineCursor i v)
+
+(def <over> (*TimeLineCursor 0 false))
+
+(defn timeline [fns]
+  (let [current (volatile! (first fns))
+        fns (volatile! (rest fns))
+        ^UnityEngine.MonoBehaviour coro-root -mono-obj
+        ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
+    (.StartCoroutine coro-root
+      (reify IEnumerator
+        (MoveNext [this]
+          (when-not panic
+            (try 
+              (set! (.v cursor) (@current))
+              (if (.v cursor) true
+                (if (do (vreset! current (first @fns) )
+                        (vswap! fns rest) @current)
+                  true
+                  (!TimeLineCursor cursor)
+                  ))
+              (catch Exception e false))))
+        (get_Current [this] (.v cursor))))
+    (fn [] (if @current true false))))
+
+(defn timeline-1 [fns] (timeline (map #(%) fns)))
+
+(defn array-timeline [^clojure.lang.PersistentHashSet opts
+                      ^|System.Object[]|               fns]
+  (let [cnt (int (dec (.Length fns)))
+        current (volatile! ((aget fns 0)))
+        ^UnityEngine.MonoBehaviour coro-root -mono-obj
+        ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
+    (.StartCoroutine coro-root
+      (reify IEnumerator
+        (MoveNext [this]
+          (try 
+            (set! (.v cursor) (@current))
+            (if (.v cursor) true
+              (if (>= (.i cursor) cnt) 
+                  (if (opts :loop) 
+                    (do (set! (.i cursor) 0)
+                        (vreset! current ((aget fns 0))) true)
+                    (!TimeLineCursor cursor))
+                  (do (set! (.i cursor) (inc (.i cursor)))
+                      (vreset! current ((aget fns (.i cursor))))
+                      @current)))
+            (catch Exception e false)))
+        (get_Current [this] (.v cursor))))
+    (fn [] (.v cursor))))
+
+(defmacro timeline* [& fns]
+  (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
+        ar (gensym)]
+    `(~'let [~ar (~'make-array System.Object ~(count fns))] 
+      ~@(map-indexed #(list 'aset ar %1 (list 'fn [] %2)) fns)
+      (array-timeline ~opts ~ar))))
+
+
+
+
+
+(deftag System.Object          {:lerp (fn [a b _] b)                        :identity (System.Object)})
+(deftag System.Single          {:lerp Mathf/Lerp                            :identity (float 0.0)})
+(deftag System.Double          {:lerp Mathf/Lerp                            :identity (double 0.0)})
+(deftag UnityEngine.Vector3    {:lerp UnityEngine.Vector3/Lerp              :identity (UnityEngine.Vector3.)})
+(deftag UnityEngine.Color      {:lerp UnityEngine.Color/Lerp                :identity (UnityEngine.Color.)})
+(deftag UnityEngine.Quaternion {:lerp UnityEngine.Quaternion/LerpUnclamped  :identity (UnityEngine.Quaternion.)})
+
+
+
+(defn args->opts [m]
+  (into {:duration 0.5} (mapv 
+    #(cond (map? %) %
+           (number? %) {:duration %}
+           (= :+ %) {:+ true}
+           (#{:pow2 :pow3 :pow4 :pow5} %) {:in % :out %}) m)))
+
+
+
+
+(deftype ^:once TweenCursor [
+  ^:volatile-mutable ^boolean          initiated
+  ^:volatile-mutable ^System.Single    start 
+  ^:volatile-mutable ^System.Single    duration
+  ^:volatile-mutable ^System.Single    ratio
+  ^:volatile-mutable ^System.Single    now])
+
+(def-pool 10000 TweenCursor initiated start duration ratio now)
+
+(defmacro tween [m o & more]
+  (let [opts      (args->opts more)
+        ratio-code '(Mathf/InverseLerp 0.0 (.duration cursor) (.now cursor))
+        easefn    (apply (partial compile-ease '(.ratio cursor))  ((juxt :in :out) opts))
+        cursor    (with-meta 'cursor {:tag TweenCursor} )
+        paths     (map-paths m)
+        prop-data (remove (comp nil? first) 
+                    (map (juxt (comp @tween.core/REGISTRY first) last) paths))
+        props     (map (comp (juxt :tag :get) first) prop-data)
+        tags      (map first props)
+       -bases     (map (comp (juxt :base :base-tag) first) prop-data)
+        basemap   
+        (into {} 
+          (map 
+            (fn [[code tag]]
+              {code (if tag (with-meta (gensym (unqualify tag)) {:tag tag}) (gensym 'base))}) 
+            (set (remove (comp nil? first) -bases))))
+        bases     (map (comp basemap first) -bases)
+        base-binds (mapcat (juxt last first) basemap)
+        getters   (map last props)
+        base-getters   (map (fn [b g] (if b (symbol-replace g {THIS b}) g)) bases getters)
+        tagmaps   (map @REGISTRY tags)
+        defaults  (map :identity tagmaps)
+        targets   (mapv last prop-data)
+        pairsyms  (mapv gensym (take (count props) (repeat 'p)))
+        val-binds 
+        (mapcat 
+          #(vector 
+            (with-meta %3 {:tag (or (-> %2 :pair :tag) *Pair-Object)}) 
+            (list (or (-> %2 :pair :vars :c) *Pair-Object) (:identity %2) %4)) 
+          tags tagmaps pairsyms targets)]
+
+   `(~'let [~THIS ~o
+          ~cursor (*TweenCursor false ~'Time/time (float ~(:duration opts)) -single -single)
+          ~@base-binds
+          ~@val-binds]
+      (~'fn []
+        (~'when-not ~'(.initiated cursor) 
+        ~'(set! (.initiated cursor) true)
+        ~@(map #(list 'set! (list '.a %1) %2) pairsyms base-getters))
+        ~'(set! (.now cursor) (- Time/time (.start cursor)))
+        (~'set! ~'(.ratio cursor) ~ratio-code)
+      ~@(map
+         #(list 'set! %1
+            (list (:lerp %2)
+              (list '.a (get pairsyms %3))
+              (list '.b (get pairsyms %3))
+              easefn ))
+        base-getters tagmaps (range 100))
+        (~'if ~'(< (.now cursor) (.duration cursor))
+          true
+          (~'do 
+            ~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms)
+            (!TweenCursor ~'cursor)))))))
+
+
+
+
+(deftween [:position] [this]
+  {:get  (.position this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Vector3})
+
+(deftween [:local :position] [this]
+  {:get (.localPosition this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Vector3})
+
+(deftween [:local :scale] [this]
+  {:get (.localScale this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Vector3})
+
+(deftween [:scale] [this]
+  {:get (.localScale this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Vector3})
+
+(deftween [:rotation] [this]
+  {:get (.rotation this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Quaternion})
+
+(deftween [:local :rotation] [this]
+  {:get (.localRotation this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Quaternion})
+
+(deftween [:euler] [this]
+  {:get (.eulerAngles this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Vector3})
+
+(deftween [:local :euler] [this]
+  {:get (.localEulerAngles this)
+   :base (.transform this)
+   :base-tag UnityEngine.Transform
+   :tag UnityEngine.Vector3})
+
+(deftween [:material :color] [this]
+  {:base (.material (.GetComponent this UnityEngine.Renderer))
+   :base-tag UnityEngine.Material
+   :get (.color this)
+   :tag UnityEngine.Color})
+
+(deftween [:light :color] [this]
+  {:base (.GetComponent this UnityEngine.Light)
+   :get (.color this)
+   :tag UnityEngine.Color})
+
+(deftween [:light :range] [this]
+  {:base (.GetComponent this UnityEngine.Light)
+   :get (.range this)
+   :tag System.Single})
+
+'[tween.core]
+
+
+
+(comment 
+(defn pool-report [] 
+  (pprint/print-table   (mapv #(do {:pool %1 :stats (try (stats %2) (catch Exception e :error))}) 
+    (into '[<>WaitCursor <>TimeLineCursor <>TweenCursor]
+      (map (comp :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))
+    (into [<>WaitCursor <>TimeLineCursor <>TweenCursor]
+      (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))))))
+
