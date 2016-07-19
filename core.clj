@@ -1,34 +1,28 @@
 (ns tween.core
   (:import Vector3 
-    [UnityEngine Color Vector4 Vector3 Vector2 Quaternion MonoBehaviour WaitForSeconds Time Mathf]
-    [System GC]
+    [UnityEngine HideFlags GameObject Color Vector4 Vector3 Vector2 Quaternion MonoBehaviour WaitForSeconds Time Mathf]
+    [System GC Object]
     [System.Collections IEnumerator])
   (:require 
-    [clojure.walk :as walk]
-    [clojure.pprint :as pprint])
-  (:use 
-    tween.pool
-    arcadia.core))
-
+    [clojure.walk :as walk])
+  (:use tween.pool))
 
 (defonce REGISTRY (atom {}))
 (defonce THIS (gensym 'this))
 (def panic false)
 
-(def -mono-obj (volatile! nil))
-(defn mono-obj []
-  (if-not (null-obj? @-mono-obj) @-mono-obj
-    (vreset! -mono-obj   
-      (or (object-typed MonoBehaviour) 
-          (hook+ (GameObject. "tween.core/mono-obj") :start #'arcadia.core/log)))))
+(def -mono-obj 
+  (let [_ (UnityEngine.Object/Destroy (GameObject/Find "tween.core/-mono-obj")) 
+        o (GameObject. "tween.core/-mono-obj")] 
+    (set! (.hideFlags o) HideFlags/HideInHierarchy)
+    (.AddComponent o UnityEngine.MonoBehaviour)))
 
 (defn every-frame [f]
-  (let [coro-root (mono-obj)]
+  (let [coro-root -mono-obj]
     (.StartCoroutine coro-root
       (reify IEnumerator
         (MoveNext [this] (f))
         (get_Current [this])))))
-
 
 (defn- datatype? [v] (or (sequential? v) (set? v) (map? v)))
 
@@ -81,22 +75,21 @@
         methods)))
     `~path))
 
+(defn var->qualified-symbol [v] (symbol (last (re-find #"^#'(.*)" (str v)))))
+
 (defmacro deftag [tag methods]
-  (let [sym (symbol (last (re-seq #"[^\.]+" (str tag))))
-        once (gensym (str "_once_" sym))
+  (let [nss (str *ns*)
+        sym (symbol (last (re-seq #"[^\.]+" (str tag))))
         pair-sym (symbol (str "Pair-" sym))
-        qualified-pair-sym (symbol (str "tween.core.Pair-" sym))
         wm-f #(with-meta % {:tag tag :volatile-mutable true})
-        pool-m (zipmap [:p :c :r] (map (comp symbol str) ["<>" "*" "!"] (repeat pair-sym)))
-        entry (conj methods {:pair {:tag qualified-pair-sym :pool pool-m}})]
+        [T P C R] (map (comp symbol str) [nss nss nss nss] ["." "/" "/" "/"] ["" "<>" "*" "!"] (repeat pair-sym))
+        entry (conj methods {:pair {:tag T :vars {:p P :c C :r R}}})]
     
     `(do 
-        (defonce ~once 
-          (do 
-           ~(do (swap! REGISTRY assoc tag entry) true)
-            (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)])))
-        (def-pool 10000 ~pair-sym ~'a ~'b)
-        (quote ~entry))))
+      (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)])
+     ~(do (swap! REGISTRY assoc tag entry) true)
+      (def-pool 10000 ~pair-sym ~'a ~'b)
+      (quote ~entry))))
 
 
 
@@ -130,7 +123,7 @@
 (defn timeline [fns]
   (let [current (volatile! (first fns))
         fns (volatile! (rest fns))
-        ^UnityEngine.MonoBehaviour coro-root (mono-obj)
+        ^UnityEngine.MonoBehaviour coro-root -mono-obj
         ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
     (.StartCoroutine coro-root
       (reify IEnumerator
@@ -154,7 +147,7 @@
                       ^|System.Object[]|               fns]
   (let [cnt (int (dec (.Length fns)))
         current (volatile! ((aget fns 0)))
-        ^UnityEngine.MonoBehaviour coro-root (mono-obj)
+        ^UnityEngine.MonoBehaviour coro-root -mono-obj
         ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
     (.StartCoroutine coro-root
       (reify IEnumerator
@@ -179,7 +172,9 @@
         ar (gensym)]
     `(~'let [~ar (~'make-array System.Object ~(count fns))] 
       ~@(map-indexed #(list 'aset ar %1 (list 'fn [] %2)) fns)
-      (~'array-timeline ~opts ~ar))))
+      (array-timeline ~opts ~ar))))
+
+
 
 
 
@@ -229,7 +224,7 @@
         (mapcat 
           #(vector 
             (with-meta %3 {:tag (or (-> %2 :pair :tag) *Pair-Object)}) 
-            (list (or (-> %2 :pair :pool :c) *Pair-Object) (:identity %2) %4)) 
+            (list (or (-> %2 :pair :vars :c) *Pair-Object) (:identity %2) %4)) 
           tags tagmaps pairsyms targets)]
 
    `(~'let [~THIS ~o
@@ -254,7 +249,7 @@
         (~'if ~'(< (.now cursor) (.duration cursor))
           true
           (~'do 
-            ~@(map #(list (or (-> %1 :pair :pool :r) !Pair-Object) %2) tagmaps pairsyms)
+            ~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms)
             ;~'(set! (.overage <over>) (- (.now cursor) (.duration cursor)))
             (!TweenCursor ~'cursor)
             ;~'(set! (.initiated cursor) false)
@@ -305,13 +300,11 @@
 
 '[tween.core]
 
-(comment) 
+(comment 
 (defn pool-report [] 
   (pprint/print-table   (mapv #(do {:pool %1 :stats (try (stats %2) (catch Exception e :error))}) 
     (into '[<>WaitCursor <>TimeLineCursor <>TweenCursor]
       (map (comp :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))
     (into [<>WaitCursor <>TimeLineCursor <>TweenCursor]
-      (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY))))))
+      (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))))))
 
-
-(pool-report)

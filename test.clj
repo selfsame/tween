@@ -1,24 +1,16 @@
 (ns tween.test 
-  (:import [UnityEngine])
-  (:require tween.core)
-  (:use 
-    arcadia.core
-    arcadia.linear))
+  (:require tween.core))
 
-(defn t1 [_]
-	(let [o (create-primitive :cube)]
-    (tween.core/timeline* :loop
-      (tween.core/tween {:local {:scale (v3 2.0)}} o 0.5)
-      (tween.core/wait 0.2)
-      (tween.core/tween {:local {:scale (v3 1.0)}} o 0.5)
-      (tween.core/tween 
-        {:local {:position (v3 (rand-nth [-1 1]) 0 (rand-nth [-1 1]))}} 
-          o 1.0))))
+(tween.core/deftag UnityEngine.Vector2 {
+  :lerp UnityEngine.Vector2/Lerp           
+  :identity (UnityEngine.Vector2.)})
 
+(tween.core/deftween [:box-collider-2d :offset] [this]
+  {:get (.offset (.GetComponent this UnityEngine.BoxCollider2D))
+   :tag UnityEngine.Vector2})
 
-(comment     
-  (timeline-1 (cycle [
-    (fn [] (wait 0.25))
-    (fn [] (tween 
-      {:local {:position (v3 (rand-nth [-1 1]) 0 (rand-nth [-1 1]))}} 
-        o 1.0))])))
+(let [o (GameObject. "tween.test")]
+  (.AddComponent o UnityEngine.BoxCollider2D)
+  (tween.core/timeline* :loop
+    (tween.core/wait 0.5)
+    (tween.core/tween {:box-collider-2d {:offset (Vector2. (rand) (rand))}} o 0.3)))
