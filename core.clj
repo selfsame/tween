@@ -249,6 +249,7 @@
       (~'fn []
         (~'when-not ~'(.initiated cursor) 
         ~'(set! (.initiated cursor) true)
+        ~'(set! (.start cursor) Time/time)
         ~@(map #(list 'set! (list '.a %1) %2) pairsyms base-getters))
         ~'(set! (.now cursor) (- Time/time (.start cursor)))
         (~'set! ~'(.ratio cursor) ~ratio-code)
@@ -262,8 +263,9 @@
         (~'if ~'(< (.now cursor) (.duration cursor))
           true
           (~'do 
-            ~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms)
-            (!TweenCursor ~'cursor)))))))
+            ;~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms)
+            ;(!TweenCursor ~'cursor)
+            nil))))))
 
 
 
@@ -331,6 +333,21 @@
   {:base (.GetComponent this UnityEngine.Light)
    :get (.range this)
    :tag System.Single})
+
+(defmacro AND [& more]
+  (let [syms (take (count more) (repeatedly gensym))]
+   `(~'let [~@(mapcat vector syms more)] 
+      (~'fn [] (~'and ~@(map list syms))))))
+
+(defmacro OR [& more]
+  (let [syms (take (count more) (repeatedly gensym))]
+   `(~'let [~@(mapcat vector syms more)] 
+      (~'fn [] (~'or ~@(map list syms))))))
+
+(defmacro NOT [f]
+  (let [sym (gensym)]
+   `(~'let [~sym ~f] 
+      (~'fn [] (~'not (~sym))))))
 
 '[tween.core]
 
