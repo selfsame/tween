@@ -1,11 +1,11 @@
 (ns tween.core
   (:import Vector3 
-    [UnityEngine Color]
-    [UnityEngine Resources]
+    [UnityEngine Color Vector4 Vector3 Vector2 Quaternion MonoBehaviour WaitForSeconds Time Mathf]
     [System GC]
-    MonoBehaviour IEnumerator WaitForSeconds Time Mathf)
+    [System.Collections IEnumerator])
   (:require 
-    [clojure.walk :as walk])
+    [clojure.walk :as walk]
+    [clojure.pprint :as pprint])
   (:use 
     tween.pool
     arcadia.core))
@@ -100,7 +100,7 @@
 
 
 
-(deftype ^:once WaitCursor [
+(deftype WaitCursor [
   ^:volatile-mutable ^System.Single start 
   ^:volatile-mutable ^boolean       initiated])
 
@@ -119,20 +119,19 @@
 
 
 
-(deftype ^:once TimeLineCursor [
-  ^:volatile-mutable ^System.Int64    i 
-  ^:volatile-mutable ^boolean         v
-  ^:volatile-mutable ^System.Single overage])
+(deftype TimeLineCursor [
+  ^:volatile-mutable ^System.Int32    i 
+  ^:volatile-mutable ^boolean         v])
 
-(def-pool 1000 TimeLineCursor ^System.Int64 i v overage)
+(def-pool 1000 TimeLineCursor i v)
 
-(def <over> (*TimeLineCursor 0 false 0.0))
+(def <over> (*TimeLineCursor 0 false))
 
 (defn timeline [fns]
   (let [current (volatile! (first fns))
         fns (volatile! (rest fns))
-        ^MonoBehaviour coro-root (mono-obj)
-        ^TimeLineCursor cursor (*TimeLineCursor 0 false 0.0)]
+        ^UnityEngine.MonoBehaviour coro-root (mono-obj)
+        ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
     (.StartCoroutine coro-root
       (reify IEnumerator
         (MoveNext [this]
@@ -153,10 +152,10 @@
 
 (defn array-timeline [^clojure.lang.PersistentHashSet opts
                       ^|System.Object[]|               fns]
-  (let [cnt (dec (.Length fns))
+  (let [cnt (int (dec (.Length fns)))
         current (volatile! ((aget fns 0)))
-        ^MonoBehaviour coro-root (mono-obj)
-        ^TimeLineCursor cursor (*TimeLineCursor 0 false 0.0)]
+        ^UnityEngine.MonoBehaviour coro-root (mono-obj)
+        ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
     (.StartCoroutine coro-root
       (reify IEnumerator
         (MoveNext [this]
@@ -178,13 +177,17 @@
 (defmacro timeline* [& fns]
   (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
         ar (gensym)]
-    `(~'let [~ar (~'make-array ~'System.Object ~(count fns))] 
+    `(~'let [~ar (~'make-array System.Object ~(count fns))] 
       ~@(map-indexed #(list 'aset ar %1 (list 'fn [] %2)) fns)
       (~'array-timeline ~opts ~ar))))
 
 
 
-
+(deftag System.Object       {:lerp (fn [a b _] b)                     :identity (System.Object)})
+(deftag System.Single       {:lerp Mathf/Lerp                         :identity (float 0.0)})
+(deftag System.Double       {:lerp Mathf/Lerp                         :identity (double 0.0)})
+(deftag UnityEngine.Vector3 {:lerp UnityEngine.Vector3/Lerp           :identity (UnityEngine.Vector3.)})
+(deftag UnityEngine.Color   {:lerp UnityEngine.Color/Lerp             :identity (UnityEngine.Color.)})
 
 
 
@@ -211,7 +214,7 @@
 (defmacro tween [m o & more]
   (let [opts      (args->opts more)
         easefn    (apply (partial compile-ease '(.ratio cursor))  ((juxt :in :out) opts))
-        cursor    (with-meta 'cursor {:tag 'tween.core.TweenCursor} )
+        cursor    (with-meta 'cursor {:tag TweenCursor} )
         paths     (map-paths m)
         prop-data (remove (comp nil? first) 
                     (map (juxt (comp @tween.core/REGISTRY first) last) paths))
@@ -225,12 +228,12 @@
         val-binds 
         (mapcat 
           #(vector 
-            (with-meta %3 {:tag (or (-> %2 :pair :tag) '*Pair-Object)}) 
-            (list (or (-> %2 :pair :pool :c) '*Pair) (:identity %2) %4)) 
+            (with-meta %3 {:tag (or (-> %2 :pair :tag) *Pair-Object)}) 
+            (list (or (-> %2 :pair :pool :c) *Pair-Object) (:identity %2) %4)) 
           tags tagmaps pairsyms targets)]
 
    `(~'let [~THIS ~o
-          ~cursor (~'*TweenCursor false ~'(float Time/time) ~(:duration opts) (float 0.0) (float 0.0))
+          ~cursor (*TweenCursor false ~'(float Time/time) ~(:duration opts) (float 0.0) (float 0.0))
           ~@val-binds]
       (~'fn []
 
@@ -251,17 +254,13 @@
         (~'if ~'(< (.now cursor) (.duration cursor))
           true
           (~'do 
-            ~@(map #(list (or (-> %1 :pair :pool :r) '!Pair-Object) %2) tagmaps pairsyms)
+            ~@(map #(list (or (-> %1 :pair :pool :r) !Pair-Object) %2) tagmaps pairsyms)
             ;~'(set! (.overage <over>) (- (.now cursor) (.duration cursor)))
-            ~'(!TweenCursor cursor)
+            (!TweenCursor ~'cursor)
             ;~'(set! (.initiated cursor) false)
             ))))))
 
-(deftag System.Object       {:lerp (fn [a b _] b)                     :identity (System.Object)})
-(deftag System.Single       {:lerp Mathf/Lerp                         :identity (float 0.0)})
-(deftag System.Double       {:lerp Mathf/Lerp                         :identity (double 0.0)})
-(deftag UnityEngine.Vector3 {:lerp UnityEngine.Vector3/Lerp           :identity (UnityEngine.Vector3.)})
-(deftag UnityEngine.Color   {:lerp UnityEngine.Color/Lerp             :identity (UnityEngine.Color.)})
+
 
 
 (deftween [:position] [this]
@@ -306,13 +305,13 @@
 
 '[tween.core]
 
-(comment 
+(comment) 
 (defn pool-report [] 
   (pprint/print-table   (mapv #(do {:pool %1 :stats (try (stats %2) (catch Exception e :error))}) 
     (into '[<>WaitCursor <>TimeLineCursor <>TweenCursor]
       (map (comp :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))
     (into [<>WaitCursor <>TimeLineCursor <>TweenCursor]
-      (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))))))
+      (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY))))))
 
 
-
+(pool-report)
