@@ -1,6 +1,8 @@
 (ns tween.core
   (:import Vector3 
-    [UnityEngine HideFlags GameObject Color Vector4 Vector3 Vector2 Quaternion MonoBehaviour WaitForSeconds Time Mathf]
+    [UnityEngine Application HideFlags MonoBehaviour
+     GameObject Color Vector4 Vector3 Vector2 Quaternion  
+     WaitForSeconds Time Mathf]
     [System GC Object]
     [System.Collections IEnumerator])
   (:require 
@@ -14,18 +16,25 @@
 (def ^System.Single -single (float 0.0))
 (def ^System.Int32  -short  (int 0))
 
-(def -mono-obj 
-  (let [_ (UnityEngine.Object/Destroy (GameObject/Find "tween.core/-mono-obj")) 
-        o (GameObject. "tween.core/-mono-obj")] 
-    (set! (.hideFlags o) HideFlags/HideInHierarchy)
-    (.AddComponent o UnityEngine.MonoBehaviour)))
+(def -mono-obj (volatile! nil))
+(defn mono-obj []
+    (if (. Application isPlaying)
+      (or (if (not (UnityEngine.Object/op_Equality @-mono-obj nil)) 
+              @-mono-obj)
+        (vreset! -mono-obj 
+          (let [o (or (GameObject/Find "tween.core/-mono-obj")
+                      (GameObject. "tween.core/-mono-obj"))] 
+            ;(set! (.hideFlags o) HideFlags/HideInHierarchy)
+            (or (.GetComponent o UnityEngine.MonoBehaviour) 
+                (.AddComponent o UnityEngine.MonoBehaviour)))))))
 
 (defn every-frame [f]
-  (let [coro-root -mono-obj]
-    (.StartCoroutine coro-root
-      (reify IEnumerator
-        (MoveNext [this] (f))
-        (get_Current [this])))))
+  (if (. Application isPlaying) 
+    (let [coro-root (mono-obj)]
+      (.StartCoroutine coro-root
+        (reify IEnumerator
+          (MoveNext [this] (f))
+          (get_Current [this]))))))
 
 (defn- datatype? [v] (or (sequential? v) (set? v) (map? v)))
 
@@ -125,51 +134,53 @@
 (def <over> (*TimeLineCursor 0 false))
 
 (defn timeline [fns]
-  (let [current (volatile! (first fns))
-        fns (volatile! (rest fns))
-        ^UnityEngine.MonoBehaviour coro-root -mono-obj
-        ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
-    (.StartCoroutine coro-root
-      (reify IEnumerator
-        (MoveNext [this]
-          (when-not panic
-            (try 
-              (set! (.v cursor) (@current))
-              (if (.v cursor) true
-                (if (do (vreset! current (first @fns) )
-                        (vswap! fns rest) @current)
-                  true
-                  (!TimeLineCursor cursor)
-                  ))
-              (catch Exception e false))))
-        (get_Current [this] (.v cursor))))
-    (fn [] (if @current true false))))
+  (when (. Application isPlaying)
+    (let [current (volatile! (first fns))
+          fns (volatile! (rest fns))
+          ^UnityEngine.MonoBehaviour coro-root (mono-obj)
+          ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
+      (.StartCoroutine coro-root
+        (reify IEnumerator
+          (MoveNext [this]
+            (when-not panic
+              (try 
+                (set! (.v cursor) (@current))
+                (if (.v cursor) true
+                  (if (do (vreset! current (first @fns) )
+                          (vswap! fns rest) @current)
+                    true
+                    (!TimeLineCursor cursor)
+                    ))
+                (catch Exception e false))))
+          (get_Current [this] (.v cursor))))
+      (fn [] (if @current true false)))))
 
 (defn timeline-1 [fns] (timeline (map #(%) fns)))
 
 (defn array-timeline [^clojure.lang.PersistentHashSet opts
                       ^|System.Object[]|               fns]
-  (let [cnt (int (dec (.Length fns)))
-        current (volatile! ((aget fns 0)))
-        ^UnityEngine.MonoBehaviour coro-root -mono-obj
-        ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
-    (.StartCoroutine coro-root
-      (reify IEnumerator
-        (MoveNext [this]
-          (try 
-            (set! (.v cursor) (@current))
-            (if (.v cursor) true
-              (if (>= (.i cursor) cnt) 
-                  (if (opts :loop) 
-                    (do (set! (.i cursor) 0)
-                        (vreset! current ((aget fns 0))) true)
-                    (!TimeLineCursor cursor))
-                  (do (set! (.i cursor) (inc (.i cursor)))
-                      (vreset! current ((aget fns (.i cursor))))
-                      @current)))
-            (catch Exception e false)))
-        (get_Current [this] (.v cursor))))
-    (fn [] (.v cursor))))
+  (when (. Application isPlaying)
+    (let [cnt (int (dec (.Length fns)))
+          current (volatile! ((aget fns 0)))
+          ^UnityEngine.MonoBehaviour coro-root (mono-obj)
+          ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
+      (.StartCoroutine coro-root
+        (reify IEnumerator
+          (MoveNext [this]
+            (try 
+              (set! (.v cursor) (@current))
+              (if (.v cursor) true
+                (if (>= (.i cursor) cnt) 
+                    (if (opts :loop) 
+                      (do (set! (.i cursor) 0)
+                          (vreset! current ((aget fns 0))) true)
+                      (!TimeLineCursor cursor))
+                    (do (set! (.i cursor) (inc (.i cursor)))
+                        (vreset! current ((aget fns (.i cursor))))
+                        @current)))
+              (catch Exception e false)))
+          (get_Current [this] (.v cursor))))
+      (fn [] (.v cursor)))))
 
 (defmacro timeline* [& fns]
   (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
