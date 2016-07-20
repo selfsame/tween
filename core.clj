@@ -4,7 +4,8 @@
      GameObject Color Vector4 Vector3 Vector2 Quaternion  
      WaitForSeconds Time Mathf]
     [System GC Object]
-    [System.Collections IEnumerator])
+    [System.Collections IEnumerator]
+    Timeline)
   (:require 
     [clojure.walk :as walk])
   (:use tween.pool))
@@ -25,8 +26,8 @@
           (let [o (or (GameObject/Find "tween.core/-mono-obj")
                       (GameObject. "tween.core/-mono-obj"))] 
             ;(set! (.hideFlags o) HideFlags/HideInHierarchy)
-            (or (.GetComponent o UnityEngine.MonoBehaviour) 
-                (.AddComponent o UnityEngine.MonoBehaviour)))))))
+            (or (.GetComponent o Timeline) 
+                (.AddComponent o Timeline)))))))
 
 (defn every-frame [f]
   (if (. Application isPlaying) 
@@ -205,9 +206,8 @@
 
 
 (defn args->opts [m]
-  (into {:duration 0.5} (mapv 
+  (into {} (mapv 
     #(cond (map? %) %
-           (number? %) {:duration %}
            (= :+ %) {:+ true}
            (#{:pow2 :pow3 :pow4 :pow5} %) {:in % :out %}) m)))
 
@@ -223,7 +223,7 @@
 
 (def-pool 10000 TweenCursor initiated start duration ratio now)
 
-(defmacro tween [m o & more]
+(defmacro tween [m o d & more]
   (let [opts      (args->opts more)
         ratio-code '(Mathf/InverseLerp 0.0 (.duration cursor) (.now cursor))
         easefn    (apply (partial compile-ease '(.ratio cursor))  ((juxt :in :out) opts))
@@ -256,7 +256,7 @@
           tags tagmaps pairsyms targets)]
 
    `(~'let [~THIS ~o
-          ~cursor (*TweenCursor false ~'Time/time (float ~(:duration opts)) -single -single)
+          ~cursor (*TweenCursor false ~'Time/time (float ~d) -single -single)
           ~@base-binds
           ~@val-binds]
       (~'fn []
