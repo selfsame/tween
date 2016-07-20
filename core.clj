@@ -138,7 +138,8 @@
     (let [current (volatile! (first fns))
           fns (volatile! (rest fns))
           ^UnityEngine.MonoBehaviour coro-root (mono-obj)
-          ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
+          ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)
+          routine
       (.StartCoroutine coro-root
         (reify IEnumerator
           (MoveNext [this]
@@ -152,8 +153,8 @@
                     (!TimeLineCursor cursor)
                     ))
                 (catch Exception e false))))
-          (get_Current [this] (.v cursor))))
-      (fn [] (if @current true false)))))
+          (get_Current [this] (.v cursor))))]
+      (fn [] (if @current routine false)))))
 
 (defn timeline-1 [fns] (timeline (map #(%) fns)))
 
@@ -163,7 +164,8 @@
     (let [cnt (int (dec (.Length fns)))
           current (volatile! ((aget fns 0)))
           ^UnityEngine.MonoBehaviour coro-root (mono-obj)
-          ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)]
+          ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)
+          routine 
       (.StartCoroutine coro-root
         (reify IEnumerator
           (MoveNext [this]
@@ -179,8 +181,8 @@
                         (vreset! current ((aget fns (.i cursor))))
                         @current)))
               (catch Exception e false)))
-          (get_Current [this] (.v cursor))))
-      (fn [] (.v cursor)))))
+          (get_Current [this] (.v cursor))))]
+      (fn [] (if (.v cursor) routine false)))))
 
 (defmacro timeline* [& fns]
   (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
