@@ -5,7 +5,7 @@
      WaitForSeconds Time Mathf]
     [System GC Object]
     [System.Collections IEnumerator]
-    Timeline)
+    Timeline Wait)
   (:require 
     [clojure.walk :as walk])
   (:use tween.pool))
@@ -16,6 +16,8 @@
 
 (def ^System.Single -single (float 0.0))
 (def ^System.Int32  -short  (int 0))
+(def ^System.Boolean TRUE  true)
+(def ^System.Boolean FALSE false)
 
 (def -mono-obj (volatile! nil))
 (defn mono-obj []
@@ -26,8 +28,8 @@
           (let [o (or (GameObject/Find "tween.core/-mono-obj")
                       (GameObject. "tween.core/-mono-obj"))] 
             ;(set! (.hideFlags o) HideFlags/HideInHierarchy)
-            (or (.GetComponent o Timeline) 
-                (.AddComponent o Timeline)))))))
+            (or (.GetComponent o UnityEngine.MonoBehaviour) 
+                (.AddComponent o UnityEngine.MonoBehaviour)))))))
 
 (defn every-frame [f]
   (if (. Application isPlaying) 
@@ -146,11 +148,11 @@
           (MoveNext [this]
             (when-not panic
               (try 
-                (set! (.v cursor) (@current))
-                (if (.v cursor) true
+                (set! (.v cursor) (.invoke @current))
+                (if (.v cursor) TRUE
                   (if (do (vreset! current (first @fns) )
                           (vswap! fns rest) @current)
-                    true
+                    TRUE
                     (!TimeLineCursor cursor)
                     ))
                 (catch Exception e false))))
@@ -171,19 +173,19 @@
         (reify IEnumerator
           (MoveNext [this]
             (try 
-              (set! (.v cursor) (@current))
-              (if (.v cursor) true
+              (set! (.v cursor) (.invoke @current))
+              (if (.v cursor) TRUE
                 (if (>= (.i cursor) cnt) 
                     (if (opts :loop) 
                       (do (set! (.i cursor) 0)
-                          (vreset! current ((aget fns 0))) true)
+                          (vreset! current ((aget fns 0))) TRUE)
                       (!TimeLineCursor cursor))
                     (do (set! (.i cursor) (inc (.i cursor)))
                         (vreset! current ((aget fns (.i cursor))))
                         @current)))
-              (catch Exception e false)))
+              (catch Exception e FALSE)))
           (get_Current [this] (.v cursor))))]
-      (fn [] (if (.v cursor) routine false)))))
+      (fn [] (if (.v cursor) routine FALSE)))))
 
 (defmacro timeline* [& fns]
   (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
@@ -256,12 +258,12 @@
           tags tagmaps pairsyms targets)]
 
    `(~'let [~THIS ~o
-          ~cursor (*TweenCursor false ~'Time/time (float ~d) -single -single)
+          ~cursor (*TweenCursor FALSE ~'Time/time (float ~d) -single -single)
           ~@base-binds
           ~@val-binds]
       (~'fn []
         (~'when-not ~'(.initiated cursor) 
-        ~'(set! (.initiated cursor) true)
+        ~'(set! (.initiated cursor) TRUE)
         ~'(set! (.start cursor) Time/time)
         ~@(map #(list 'set! (list '.a %1) %2) pairsyms base-getters))
         ~'(set! (.now cursor) (- Time/time (.start cursor)))
@@ -274,11 +276,12 @@
               easefn ))
         base-getters tagmaps (range 100))
         (~'if ~'(< (.now cursor) (.duration cursor))
-          true
-          (~'do 
+          TRUE FALSE
+          #_(~'do 
             ;~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms)
             ;(!TweenCursor ~'cursor)
-            nil))))))
+            nil)
+          )))))
 
 
 
@@ -374,3 +377,64 @@
     (into [<>WaitCursor <>TimeLineCursor <>TweenCursor]
       (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))))))
 
+
+(use 'arcadia.core)
+
+
+
+ #_(timeline* :loop 
+  #(log 'start)
+(time ((let [^|Wait[]| ar (into-array Wait (map (fn [_] (Wait. 0.5)) (range 10000)))]
+  (fn [] (loop [i 0 ^boolean r false]
+    (if (= i (.Length ar)) r
+      (recur (inc i) 
+         (or (.step (aget ar (int i))) r))))))))
+  #(log 'next))
+
+(use 'hard.core 'pdfn.core )
+(require '[clojure.pprint :as pprint] )
+
+(.StopAllCoroutines (mono-obj))
+
+
+
+
+
+(deftype TL [^|System.Object[]|         fs 
+             ^int             ^:volatile-mutable idx] 
+  IEnumerator
+  (MoveNext [this]
+    (or (.invoke (aget fs idx))
+        (do (set!  (.idx this) (inc idx))
+            (< idx (.Length fs)))))
+  (get_Current  [this] TRUE))
+
+(defn linetime [^|System.Object[]| ar]
+  (.StartCoroutine (mono-obj) (TL. ar 0 )))
+
+
+(clear-cloned!)
+(for [x (range 15)
+      y (range 15)
+      :let [o (clone! :ball)]] 
+(linetime (into-array System.Object [
+  (Wait. (?f 0.5))
+  (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0)
+
+  (Wait. 2.0)
+ (tween {:position (V* (Vector3. (?f)(?f)(?f)) 2)} o 4.0)
+  (Wait. 1.0)])))
+
+
+(comment (deftype TL [^|System.Object[]|         fs 
+             ^int   ^:volatile-mutable idx
+             ^boolean ^:volatile-mutable v] 
+  IEnumerator
+  (MoveNext [this]
+    (or (.invoke (aget fs idx));(set! (.v this) (if (.invoke (aget fs idx)) true false))
+        (do (set! (.idx this) (inc idx))
+            (< idx (.Length fs)))))
+  (get_Current [this] (.invoke (aget fs idx)))))
+
+
+  (ppexpand   (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0))
