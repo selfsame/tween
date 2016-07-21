@@ -97,12 +97,12 @@
   (let [nss (str *ns*)
         sym (symbol (unqualify tag))
         pair-sym (symbol (str "Pair-" sym))
-        wm-f #(with-meta % {:tag tag :volatile-mutable true})
+        wm-f #(with-meta % {:volatile-mutable true}) #_{:tag tag} 
         [T P C R] (map (comp symbol str) [nss nss nss nss] ["." "/" "/" "/"] ["" "<>" "*" "!"] (repeat pair-sym))
         entry (conj methods {:pair {:tag T :vars {:p P :c C :r R}}})]
     
     `(do 
-      (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)])
+      (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)  ])
      ~(do (swap! REGISTRY assoc tag entry) true)
       (def-pool 10000 ~pair-sym ~'a ~'b)
       (quote ~entry))))
@@ -116,15 +116,15 @@
 (def-pool 1000 WaitCursor start initiated)
 
 (defn wait [n] 
-  (let [cursor (*WaitCursor (float 0) false)] 
+  (let [cursor (*WaitCursor (float 0) FALSE)] 
     (fn [] 
       (if (.initiated cursor)
         (if (pos? (- (+ (.start cursor) (float n)) Time/time)) 
-          true
-          (!WaitCursor cursor))
+          TRUE
+          (do (!WaitCursor cursor) FALSE))
         (do 
-          (set! (.initiated cursor) true)
-          (set! (.start cursor) Time/time) true)))))
+          (set! (.initiated cursor) TRUE)
+          (set! (.start cursor) Time/time) TRUE)))))
 
 
 
@@ -225,11 +225,14 @@
 
 (def-pool 10000 TweenCursor initiated start duration ratio now)
 
+(defn ^System.Boolean expired? [^Wait w]
+  (if (.invoke w) TRUE FALSE))
+
 (defmacro tween [m o d & more]
   (let [opts      (args->opts more)
-        ratio-code '(Mathf/InverseLerp 0.0 (.duration cursor) (.now cursor))
+        ratio-code '(.ratio cursor)
         easefn    (apply (partial compile-ease '(.ratio cursor))  ((juxt :in :out) opts))
-        cursor    (with-meta 'cursor {:tag TweenCursor} )
+        cursor    (with-meta 'cursor {:tag Wait} )
         paths     (map-paths m)
         prop-data (remove (comp nil? first) 
                     (map (juxt (comp @tween.core/REGISTRY first) last) paths))
@@ -253,21 +256,22 @@
         val-binds 
         (mapcat 
           #(vector 
-            (with-meta %3 {:tag (or (-> %2 :pair :tag) *Pair-Object)}) 
-            (list (or (-> %2 :pair :vars :c) *Pair-Object) (:identity %2) %4)) 
+            (with-meta %3 {:tag (-> %2 :pair :tag)}) 
+            (list ;(or (-> %2 :pair :vars :c) *Pair-Object) 
+              'new (-> %2 :pair :tag)
+              (:identity %2) %4)) 
           tags tagmaps pairsyms targets)]
 
-   `(~'let [~THIS ~o
-          ~cursor (*TweenCursor FALSE ~'Time/time (float ~d) -single -single)
+   `(~'let [~(with-meta THIS {:tag UnityEngine.GameObject}) ~o
+          ~cursor (~'Wait. (float ~d))
           ~@base-binds
           ~@val-binds]
       (~'fn []
-        (~'when-not ~'(.initiated cursor) 
-        ~'(set! (.initiated cursor) TRUE)
-        ~'(set! (.start cursor) Time/time)
-        ~@(map #(list 'set! (list '.a %1) %2) pairsyms base-getters))
-        ~'(set! (.now cursor) (- Time/time (.start cursor)))
-        (~'set! ~'(.ratio cursor) ~ratio-code)
+        (~'if ~'(.active cursor) TRUE
+          (~'do  
+          ~@(map #(list 'set! (list '.a %1) %2) pairsyms base-getters)))
+
+
       ~@(map
          #(list 'set! %1
             (list (:lerp %2)
@@ -275,13 +279,13 @@
               (list '.b (get pairsyms %3))
               easefn ))
         base-getters tagmaps (range 100))
-        (~'if ~'(< (.now cursor) (.duration cursor))
+      (expired? ~'cursor)
+        #_(~'if ~'(.invoke cursor)
           TRUE FALSE
           #_(~'do 
-            ;~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms)
-            ;(!TweenCursor ~'cursor)
-            nil)
-          )))))
+            ~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms))
+          ) 
+        ))))
 
 
 
@@ -390,15 +394,15 @@
       (recur (inc i) 
          (or (.step (aget ar (int i))) r))))))))
   #(log 'next))
-
+(comment 
 (use 'hard.core 'pdfn.core )
 (require '[clojure.pprint :as pprint] )
 
 (.StopAllCoroutines (mono-obj))
 
+(import '[TimeLine])
 
-
-
+cloj
 
 (deftype TL [^|System.Object[]|         fs 
              ^int             ^:volatile-mutable idx] 
@@ -412,17 +416,22 @@
 (defn linetime [^|System.Object[]| ar]
   (.StartCoroutine (mono-obj) (TL. ar 0 )))
 
+(List. (TimeLine. ))
+
+(import '[System.Collections.Generic ])
+
+
 
 (clear-cloned!)
-(for [x (range 15)
-      y (range 15)
-      :let [o (clone! :ball)]] 
+(for [x (range 35)
+      y (range 35)
+      :let [^GameObject o (clone! :ball)]] 
 (linetime (into-array System.Object [
   (Wait. (?f 0.5))
-  (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0)
+  (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 8.0)
 
   (Wait. 2.0)
- (tween {:position (V* (Vector3. (?f)(?f)(?f)) 2)} o 4.0)
+ (tween {:position (V* (Vector3. (?f)(?f)(?f)) 2)} o 8.0)
   (Wait. 1.0)])))
 
 
@@ -437,4 +446,13 @@
   (get_Current [this] (.invoke (aget fs idx)))))
 
 
-  (ppexpand   (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0))
+  (ppexpand   (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0)))
+
+
+(use 'hard.core 'pdfn.core )
+(require '[clojure.pprint :as pprint] )
+
+(ppexpand   (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0))
+(ppexpand   (tween {:position2 (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0))
+
+(ppexpand (tween {:rotation (?rotation)} (clone! :ball) 5.0))

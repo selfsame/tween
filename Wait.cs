@@ -18,7 +18,8 @@ public class Wait{
 		return true;
 	}
 
-	public float ratio(){
-		return (end - UnityEngine.Time.time) /  duration;
-	}
+	public float ratio{
+		get{
+		  return (end - UnityEngine.Time.time) /  duration;}}
+
 }
