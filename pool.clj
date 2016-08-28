@@ -30,9 +30,9 @@
       (~'def ~pool (new ~Pool (~'make-array ~'System.Object ~length) -1))
       (~'defn ~return
         [~(with-meta (symbol "a") {:tag type-sym})] 
-        (recycle ~pool ~'a))
+        (~'tween.pool/recycle ~pool ~'a))
       (~'defn ~sym [~@fields]
-        (~'if-let [~(with-meta o# {:tag type-sym}) (reuse ~pool)]
+        (~'if-let [~(with-meta o# {:tag type-sym}) ('tween.pool/reuse ~pool)]
           (~'do 
           ~@(map #(list 'set! (list (symbol (str "." %)) o#) %) 
               fields) ~o#)

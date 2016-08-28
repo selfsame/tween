@@ -10,12 +10,19 @@
     [clojure.walk :as walk])
   (:use tween.pool))
 
-(defonce REGISTRY (atom {}))
+(def REGISTRY (atom {}))
 (defonce THIS (gensym 'this))
 (def panic false)
 
 (def ^System.Single -single (float 0.0))
 (def ^System.Int32  -short  (int 0))
+
+(deftype TweenCursor [
+  ^:volatile-mutable ^boolean          initiated
+  ^:volatile-mutable ^System.Single    start 
+  ^:volatile-mutable ^System.Single    duration
+  ^:volatile-mutable ^System.Single    ratio
+  ^:volatile-mutable ^System.Single    now])
 
 (def -mono-obj (volatile! nil))
 (defn mono-obj []
@@ -102,7 +109,7 @@
     `(do 
       (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)])
      ~(do (swap! REGISTRY assoc tag entry) true)
-      (def-pool 10000 ~pair-sym ~'a ~'b)
+      (~'tween.pool/def-pool 10000 ~pair-sym ~'a ~'b)
       (quote ~entry))))
 
 
@@ -170,7 +177,7 @@
       (.StartCoroutine coro-root
         (reify IEnumerator
           (MoveNext [this]
-            (try 
+            (do #_try 
               (set! (.v cursor) (@current))
               (if (.v cursor) true
                 (if (>= (.i cursor) cnt) 
@@ -181,27 +188,21 @@
                     (do (set! (.i cursor) (inc (.i cursor)))
                         (vreset! current ((aget fns (.i cursor))))
                         @current)))
-              (catch Exception e false)))
+              #_(catch Exception e false) ))
           (get_Current [this] (.v cursor))))]
       (fn [] (if (.v cursor) routine false)))))
 
 (defmacro timeline* [& fns]
   (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
         ar (gensym)]
-    `(~'let [~ar (~'make-array System.Object ~(count fns))] 
+    `(~'let [~ar (~'make-array ~'System.Object ~(count fns))] 
       ~@(map-indexed #(list 'aset ar %1 (list 'fn [] %2)) fns)
-      (array-timeline ~opts ~ar))))
+      (~'tween.core/array-timeline ~opts ~ar))))
 
 
 
 
 
-(deftag System.Object          {:lerp (fn [a b _] b)                        :identity (System.Object)})
-(deftag System.Single          {:lerp Mathf/Lerp                            :identity (float 0.0)})
-(deftag System.Double          {:lerp Mathf/Lerp                            :identity (double 0.0)})
-(deftag UnityEngine.Vector3    {:lerp UnityEngine.Vector3/Lerp              :identity (UnityEngine.Vector3.)})
-(deftag UnityEngine.Color      {:lerp UnityEngine.Color/Lerp                :identity (UnityEngine.Color.)})
-(deftag UnityEngine.Quaternion {:lerp UnityEngine.Quaternion/LerpUnclamped  :identity (UnityEngine.Quaternion.)})
 
 
 
@@ -214,20 +215,15 @@
 
 
 
-(deftype ^:once TweenCursor [
-  ^:volatile-mutable ^boolean          initiated
-  ^:volatile-mutable ^System.Single    start 
-  ^:volatile-mutable ^System.Single    duration
-  ^:volatile-mutable ^System.Single    ratio
-  ^:volatile-mutable ^System.Single    now])
 
-(def-pool 10000 TweenCursor initiated start duration ratio now)
+
+;(def-pool 10000 TweenCursor initiated start duration ratio now)
 
 (defmacro tween [m o d & more]
   (let [opts      (args->opts more)
         ratio-code '(Mathf/InverseLerp 0.0 (.duration cursor) (.now cursor))
         easefn    (apply (partial compile-ease '(.ratio cursor))  ((juxt :in :out) opts))
-        cursor    (with-meta 'cursor {:tag TweenCursor} )
+        cursor    'cursor ;(with-meta 'cursor {:tag tween.core.TweenCursor} )
         paths     (map-paths m)
         prop-data (remove (comp nil? first) 
                     (map (juxt (comp @tween.core/REGISTRY first) last) paths))
@@ -251,12 +247,12 @@
         val-binds 
         (mapcat 
           #(vector 
-            (with-meta %3 {:tag (or (-> %2 :pair :tag) *Pair-Object)}) 
-            (list (or (-> %2 :pair :vars :c) *Pair-Object) (:identity %2) %4)) 
+            (with-meta %3 {:tag (or (-> %2 :pair :tag) '*Pair-Object)}) 
+            (list (or (-> %2 :pair :vars :c) '*Pair-Object) (:identity %2) %4)) 
           tags tagmaps pairsyms targets)]
 
    `(~'let [~THIS ~o
-          ~cursor (*TweenCursor false ~'Time/time (float ~d) -single -single)
+          ~cursor (tween.core.TweenCursor. false ~'Time/time (float ~d) tween.core/-single tween.core/-single)
           ~@base-binds
           ~@val-binds]
       (~'fn []
@@ -275,10 +271,7 @@
         base-getters tagmaps (range 100))
         (~'if ~'(< (.now cursor) (.duration cursor))
           true
-          (~'do 
-            ;~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms)
-            ;(!TweenCursor ~'cursor)
-            nil))))))
+          false)))))
 
 
 
@@ -346,6 +339,14 @@
   {:base (.GetComponent this UnityEngine.Light)
    :get (.range this)
    :tag System.Single})
+
+(deftag System.Single          {:lerp Mathf/Lerp                            :identity (float 0.0)})
+(deftag System.Double          {:lerp Mathf/Lerp                            :identity (double 0.0)})
+(deftag UnityEngine.Vector3    {:lerp UnityEngine.Vector3/Lerp              :identity (UnityEngine.Vector3.)})
+(deftag UnityEngine.Color      {:lerp UnityEngine.Color/Lerp                :identity (UnityEngine.Color.)})
+(deftag UnityEngine.Quaternion {:lerp UnityEngine.Quaternion/LerpUnclamped  :identity (UnityEngine.Quaternion.)})
+(deftag System.Object          {:lerp (fn [a b _] b)                        :identity (System.Object.)})
+
 
 (defmacro AND [& more]
   (let [syms (take (count more) (repeatedly gensym))]
