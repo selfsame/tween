@@ -1,17 +1,17 @@
 (ns tween.core
-  (:import Vector3 
-    [UnityEngine Application HideFlags MonoBehaviour
-     GameObject Color Vector4 Vector3 Vector2 Quaternion  
-     WaitForSeconds Time Mathf]
-    [System GC Object]
+  (:import 
+    [UnityEngine Application MonoBehaviour WaitForSeconds Time Mathf
+     GameObject Color Vector4 Vector3 Vector2 Quaternion]
+    [System Object]
     [System.Collections IEnumerator]
-    Timeline Wait)
-  (:require 
-    [clojure.walk :as walk])
-  (:use tween.pool))
+    Wait MonoObj
 
-(defonce REGISTRY (atom {}))
+    ObjectPair SinglePair DoublePair Int16Pair Int32Pair Int64Pair QuaternionPair 
+    Vector4Pair Vector3Pair Vector2Pair ColorPair)
+  (:require [clojure.walk :as walk]))
+
 (defonce THIS (gensym 'this))
+(defonce REGISTRY (atom {}))
 (def panic false)
 
 (def ^System.Single -single (float 0.0))
@@ -26,18 +26,9 @@
               @-mono-obj)
         (vreset! -mono-obj 
           (let [o (or (GameObject/Find "tween.core/-mono-obj")
-                      (GameObject. "tween.core/-mono-obj"))] 
-            ;(set! (.hideFlags o) HideFlags/HideInHierarchy)
-            (or (.GetComponent o UnityEngine.MonoBehaviour) 
-                (.AddComponent o UnityEngine.MonoBehaviour)))))))
-
-(defn every-frame [f]
-  (if (. Application isPlaying) 
-    (let [coro-root (mono-obj)]
-      (.StartCoroutine coro-root
-        (reify IEnumerator
-          (MoveNext [this] (f))
-          (get_Current [this]))))))
+                      (GameObject. "tween.core/-mono-obj"))]
+            (or (.GetComponent o MonoObj) 
+                (.AddComponent o MonoObj)))))))
 
 (defn- datatype? [v] (or (sequential? v) (set? v) (map? v)))
 
@@ -45,6 +36,106 @@
   (cond (symbol? form)   (get xform form form)
         (datatype? form) (clojure.walk/walk #(symbol-replace % xform) identity form)
         :else form))
+
+(defmacro deftween [path props methods]
+  (let [this (first props)]
+    `(do (swap! REGISTRY assoc ~path 
+      (quote ~(into {} (map 
+        (juxt first 
+          (comp ;(partial list 'quote) 
+                (comp #(symbol-replace % {this THIS}) last))) 
+        methods))))
+     (list (quote ~'tween) ~path))))
+
+(defn unqualify [s] (last (re-seq #"[^\.]+" (str s))))
+(defn var->qualified-symbol [v] (symbol (last (re-find #"^#'(.*)" (str v)))))
+
+(defmacro deftag [tag methods]
+  (let [entry (conj methods {:tag tag})]
+    `(do (swap! REGISTRY assoc (quote ~tag) (quote ~entry))
+      (list (quote ~'tag) (quote ~tag)))))
+
+(defmacro AND [& more]
+  (let [syms (take (count more) (repeatedly gensym))]
+   `(~'let [~@(mapcat vector syms more)] 
+      (~'fn [] (~'and ~@(map list syms))))))
+
+(defmacro OR [& more]
+  (let [syms (take (count more) (repeatedly gensym))]
+   `(~'let [~@(mapcat vector syms more)] 
+      (~'fn [] (~'or ~@(map list syms))))))
+
+(defmacro NOT [f]
+  (let [sym (gensym)]
+   `(~'let [~sym ~f] 
+      (~'fn [] (~'not (~sym))))))
+
+
+
+(defn ^Wait wait [n] (Wait. n))
+
+
+(deftype TimeLineCursor [
+  ^:volatile-mutable ^System.Int32    i 
+  ^:volatile-mutable ^boolean         v])
+
+(defn timeline [fns]
+  (when (. Application isPlaying)
+    (let [current (volatile! (first fns))
+          fns (volatile! (rest fns))
+          ^UnityEngine.MonoBehaviour coro-root (mono-obj)
+          ^tween.core.TimeLineCursor cursor (TimeLineCursor. 0 false)
+          routine
+      (.StartCoroutine coro-root
+        (reify IEnumerator
+          (MoveNext [this]
+            (when-not panic
+              (try 
+                (set! (.v cursor) (.invoke @current))
+                (if (.v cursor) TRUE
+                  (if (do (vreset! current (first @fns) )
+                          (vswap! fns rest) @current)
+                    TRUE FALSE))
+                (catch Exception e false))))
+          (get_Current [this] (.v cursor))))]
+      (fn [] (if @current routine false)))))
+
+(defn timeline-1 [fns] (timeline (map #(%) fns)))
+
+(defn array-timeline [^clojure.lang.PersistentHashSet opts
+                      ^|System.Object[]|               fns]
+  (when (. Application isPlaying)
+    (let [cnt (int (dec (.Length fns)))
+          current (volatile! ((aget fns 0)))
+          ^UnityEngine.MonoBehaviour coro-root (mono-obj)
+          ^tween.core.TimeLineCursor cursor (TimeLineCursor. 0 false)
+          routine 
+      (.StartCoroutine coro-root
+        (reify IEnumerator
+          (MoveNext [this]
+            (try 
+              (set! (.v cursor) (.invoke @current))
+              (if (.v cursor) TRUE
+                (if (>= (.i cursor) cnt) 
+                    (if (opts :loop) 
+                      (do (set! (.i cursor) 0)
+                          (vreset! current ((aget fns 0))) TRUE)
+                      FALSE)
+                    (do (set! (.i cursor) (inc (.i cursor)))
+                        (vreset! current ((aget fns (.i cursor))))
+                        @current)))
+              (catch Exception e FALSE)))
+          (get_Current [this] (.v cursor))))]
+      (fn [] (if (.v cursor) routine FALSE)))))
+
+(defmacro timeline* [& fns]
+  (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
+        ar (gensym)]
+    `(~'let [~ar (~'make-array System.Object ~(count fns))] 
+      ~@(map-indexed #(list 'aset ar %1 (list 'fn [] %2)) fns)
+      (array-timeline ~opts ~ar))))
+
+
 
 (defmacro pow2 [a] `(Mathf/Pow ~a 2))
 (defmacro pow3 [a] `(Mathf/Pow ~a 3))
@@ -79,134 +170,6 @@
         (mapcat #(map-paths (conj res %) (get m %)) (keys m))
         [[res m]])))
 
-
-
-
-(defmacro deftween [path props methods]
-  (let [this (first props)]
-    (swap! REGISTRY assoc path 
-      (into {} (map 
-        (juxt first (comp (comp #(symbol-replace % {this THIS}) last))) 
-        methods)))
-    `~path))
-
-(defn unqualify [s] (last (re-seq #"[^\.]+" (str s))))
-(defn var->qualified-symbol [v] (symbol (last (re-find #"^#'(.*)" (str v)))))
-
-(defmacro deftag [tag methods]
-  (let [nss (str *ns*)
-        sym (symbol (unqualify tag))
-        pair-sym (symbol (str "Pair-" sym))
-        wm-f #(with-meta % {:volatile-mutable true}) #_{:tag tag} 
-        [T P C R] (map (comp symbol str) [nss nss nss nss] ["." "/" "/" "/"] ["" "<>" "*" "!"] (repeat pair-sym))
-        entry (conj methods {:pair {:tag T :vars {:p P :c C :r R}}})]
-    
-    `(do 
-      (deftype ^:once ~pair-sym [~(wm-f 'a) ~(wm-f 'b)  ])
-     ~(do (swap! REGISTRY assoc tag entry) true)
-      (def-pool 10000 ~pair-sym ~'a ~'b)
-      (quote ~entry))))
-
-
-
-(deftype WaitCursor [
-  ^:volatile-mutable ^System.Single start 
-  ^:volatile-mutable ^boolean       initiated])
-
-(def-pool 1000 WaitCursor start initiated)
-
-(defn wait [n] 
-  (let [cursor (*WaitCursor (float 0) FALSE)] 
-    (fn [] 
-      (if (.initiated cursor)
-        (if (pos? (- (+ (.start cursor) (float n)) Time/time)) 
-          TRUE
-          (do (!WaitCursor cursor) FALSE))
-        (do 
-          (set! (.initiated cursor) TRUE)
-          (set! (.start cursor) Time/time) TRUE)))))
-
-
-
-(deftype TimeLineCursor [
-  ^:volatile-mutable ^System.Int32    i 
-  ^:volatile-mutable ^boolean         v])
-
-(def-pool 1000 TimeLineCursor i v)
-
-(def <over> (*TimeLineCursor 0 false))
-
-(defn timeline [fns]
-  (when (. Application isPlaying)
-    (let [current (volatile! (first fns))
-          fns (volatile! (rest fns))
-          ^UnityEngine.MonoBehaviour coro-root (mono-obj)
-          ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)
-          routine
-      (.StartCoroutine coro-root
-        (reify IEnumerator
-          (MoveNext [this]
-            (when-not panic
-              (try 
-                (set! (.v cursor) (.invoke @current))
-                (if (.v cursor) TRUE
-                  (if (do (vreset! current (first @fns) )
-                          (vswap! fns rest) @current)
-                    TRUE
-                    (!TimeLineCursor cursor)
-                    ))
-                (catch Exception e false))))
-          (get_Current [this] (.v cursor))))]
-      (fn [] (if @current routine false)))))
-
-(defn timeline-1 [fns] (timeline (map #(%) fns)))
-
-(defn array-timeline [^clojure.lang.PersistentHashSet opts
-                      ^|System.Object[]|               fns]
-  (when (. Application isPlaying)
-    (let [cnt (int (dec (.Length fns)))
-          current (volatile! ((aget fns 0)))
-          ^UnityEngine.MonoBehaviour coro-root (mono-obj)
-          ^tween.core.TimeLineCursor cursor (*TimeLineCursor 0 false)
-          routine 
-      (.StartCoroutine coro-root
-        (reify IEnumerator
-          (MoveNext [this]
-            (try 
-              (set! (.v cursor) (.invoke @current))
-              (if (.v cursor) TRUE
-                (if (>= (.i cursor) cnt) 
-                    (if (opts :loop) 
-                      (do (set! (.i cursor) 0)
-                          (vreset! current ((aget fns 0))) TRUE)
-                      (!TimeLineCursor cursor))
-                    (do (set! (.i cursor) (inc (.i cursor)))
-                        (vreset! current ((aget fns (.i cursor))))
-                        @current)))
-              (catch Exception e FALSE)))
-          (get_Current [this] (.v cursor))))]
-      (fn [] (if (.v cursor) routine FALSE)))))
-
-(defmacro timeline* [& fns]
-  (let [[opts fns] ((juxt (comp set filter) remove) keyword? fns)
-        ar (gensym)]
-    `(~'let [~ar (~'make-array System.Object ~(count fns))] 
-      ~@(map-indexed #(list 'aset ar %1 (list 'fn [] %2)) fns)
-      (array-timeline ~opts ~ar))))
-
-
-
-
-
-(deftag System.Object          {:lerp (fn [a b _] b)                        :identity (System.Object)})
-(deftag System.Single          {:lerp Mathf/Lerp                            :identity (float 0.0)})
-(deftag System.Double          {:lerp Mathf/Lerp                            :identity (double 0.0)})
-(deftag UnityEngine.Vector3    {:lerp UnityEngine.Vector3/Lerp              :identity (UnityEngine.Vector3.)})
-(deftag UnityEngine.Color      {:lerp UnityEngine.Color/Lerp                :identity (UnityEngine.Color.)})
-(deftag UnityEngine.Quaternion {:lerp UnityEngine.Quaternion/LerpUnclamped  :identity (UnityEngine.Quaternion.)})
-
-
-
 (defn args->opts [m]
   (into {} (mapv 
     #(cond (map? %) %
@@ -214,7 +177,7 @@
            (#{:pow2 :pow3 :pow4 :pow5} %) {:in % :out %}) m)))
 
 
-
+(defn ^System.Boolean expired? [^Wait w] (if (.invoke w) TRUE FALSE))
 
 (deftype ^:once TweenCursor [
   ^:volatile-mutable ^boolean          initiated
@@ -222,11 +185,6 @@
   ^:volatile-mutable ^System.Single    duration
   ^:volatile-mutable ^System.Single    ratio
   ^:volatile-mutable ^System.Single    now])
-
-(def-pool 10000 TweenCursor initiated start duration ratio now)
-
-(defn ^System.Boolean expired? [^Wait w]
-  (if (.invoke w) TRUE FALSE))
 
 (defmacro tween [m o d & more]
   (let [opts      (args->opts more)
@@ -256,10 +214,8 @@
         val-binds 
         (mapcat 
           #(vector 
-            (with-meta %3 {:tag (-> %2 :pair :tag)}) 
-            (list ;(or (-> %2 :pair :vars :c) *Pair-Object) 
-              'new (-> %2 :pair :tag)
-              (:identity %2) %4)) 
+            (with-meta %3 {:tag (:pair %2)}) 
+            (list 'new (:pair %2) (:identity %2) %4)) 
           tags tagmaps pairsyms targets)]
 
    `(~'let [~(with-meta THIS {:tag UnityEngine.GameObject}) ~o
@@ -270,24 +226,22 @@
         (~'if ~'(.active cursor) TRUE
           (~'do  
           ~@(map #(list 'set! (list '.a %1) %2) pairsyms base-getters)))
+          ~@(map
+             #(list 'set! %1
+                (list (:lerp %2)
+                  (list '.a (get pairsyms %3))
+                  (list '.b (get pairsyms %3))
+                  easefn ))
+            base-getters tagmaps (range 100))
+          (expired? ~'cursor)))))
 
 
-      ~@(map
-         #(list 'set! %1
-            (list (:lerp %2)
-              (list '.a (get pairsyms %3))
-              (list '.b (get pairsyms %3))
-              easefn ))
-        base-getters tagmaps (range 100))
-      (expired? ~'cursor)
-        #_(~'if ~'(.invoke cursor)
-          TRUE FALSE
-          #_(~'do 
-            ~@(map #(list (or (-> %1 :pair :vars :r) !Pair-Object) %2) tagmaps pairsyms))
-          ) 
-        ))))
-
-
+(deftag System.Object          {:pair ObjectPair     :lerp (fn [a b _] b)           :identity (System.Object.)})
+(deftag System.Single          {:pair SinglePair     :lerp Mathf/Lerp               :identity (float 0.0)})
+(deftag System.Double          {:pair DoublePair     :lerp Mathf/Lerp               :identity (double 0.0)})
+(deftag UnityEngine.Vector3    {:pair Vector3Pair    :lerp UnityEngine.Vector3/Lerp :identity (UnityEngine.Vector3.)})
+(deftag UnityEngine.Color      {:pair ColorPair      :lerp UnityEngine.Color/Lerp   :identity (UnityEngine.Color.)})
+(deftag UnityEngine.Quaternion {:pair QuaternionPair :lerp Quaternion/LerpUnclamped :identity (Quaternion.)})
 
 
 (deftween [:position] [this]
@@ -354,105 +308,27 @@
    :get (.range this)
    :tag System.Single})
 
-(defmacro AND [& more]
-  (let [syms (take (count more) (repeatedly gensym))]
-   `(~'let [~@(mapcat vector syms more)] 
-      (~'fn [] (~'and ~@(map list syms))))))
+(comment 
+(defn spit-pair [n t] 
+  (spit (str "Assets/tween/pairs/" n ".cs") (str 
+    "using UnityEngine;\n"
+    "public class " n "{\n"
+    "    public " t " a;\n"
+    "    public " t " b;\n"
+    "    public " n "(" t " A, " t " B){\n"
+    "    a = A; b = B;\n  }\n}" )))
 
-(defmacro OR [& more]
-  (let [syms (take (count more) (repeatedly gensym))]
-   `(~'let [~@(mapcat vector syms more)] 
-      (~'fn [] (~'or ~@(map list syms))))))
-
-(defmacro NOT [f]
-  (let [sym (gensym)]
-   `(~'let [~sym ~f] 
-      (~'fn [] (~'not (~sym))))))
+(map (partial apply spit-pair) [
+  ['ObjectPair      'System.Object]
+  ['SinglePair      'System.Single]
+  ['DoublePair      'System.Double]
+  ['Int16Pair       'System.Int16]
+  ['Int32Pair       'System.Int32]
+  ['Int64Pair       'System.Int64]
+  ['QuaternionPair  'UnityEngine.Quaternion]
+  ['Vector4Pair     'UnityEngine.Vector4]
+  ['Vector3Pair     'UnityEngine.Vector3]
+  ['Vector2Pair     'UnityEngine.Vector2]
+  ['ColorPair       'UnityEngine.Color]]))
 
 '[tween.core]
-
-
-
-(comment 
-(defn pool-report [] 
-  (pprint/print-table   (mapv #(do {:pool %1 :stats (try (stats %2) (catch Exception e :error))}) 
-    (into '[<>WaitCursor <>TimeLineCursor <>TweenCursor]
-      (map (comp :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))
-    (into [<>WaitCursor <>TimeLineCursor <>TweenCursor]
-      (map (comp deref resolve :p :pool :pair last) (filter (comp symbol? first) @REGISTRY)))))))
-
-
-(use 'arcadia.core)
-
-
-
- #_(timeline* :loop 
-  #(log 'start)
-(time ((let [^|Wait[]| ar (into-array Wait (map (fn [_] (Wait. 0.5)) (range 10000)))]
-  (fn [] (loop [i 0 ^boolean r false]
-    (if (= i (.Length ar)) r
-      (recur (inc i) 
-         (or (.step (aget ar (int i))) r))))))))
-  #(log 'next))
-(comment 
-(use 'hard.core 'pdfn.core )
-(require '[clojure.pprint :as pprint] )
-
-(.StopAllCoroutines (mono-obj))
-
-(import '[TimeLine])
-
-cloj
-
-(deftype TL [^|System.Object[]|         fs 
-             ^int             ^:volatile-mutable idx] 
-  IEnumerator
-  (MoveNext [this]
-    (or (.invoke (aget fs idx))
-        (do (set!  (.idx this) (inc idx))
-            (< idx (.Length fs)))))
-  (get_Current  [this] TRUE))
-
-(defn linetime [^|System.Object[]| ar]
-  (.StartCoroutine (mono-obj) (TL. ar 0 )))
-
-(List. (TimeLine. ))
-
-(import '[System.Collections.Generic ])
-
-
-
-(clear-cloned!)
-(for [x (range 35)
-      y (range 35)
-      :let [^GameObject o (clone! :ball)]] 
-(linetime (into-array System.Object [
-  (Wait. (?f 0.5))
-  (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 8.0)
-
-  (Wait. 2.0)
- (tween {:position (V* (Vector3. (?f)(?f)(?f)) 2)} o 8.0)
-  (Wait. 1.0)])))
-
-
-(comment (deftype TL [^|System.Object[]|         fs 
-             ^int   ^:volatile-mutable idx
-             ^boolean ^:volatile-mutable v] 
-  IEnumerator
-  (MoveNext [this]
-    (or (.invoke (aget fs idx));(set! (.v this) (if (.invoke (aget fs idx)) true false))
-        (do (set! (.idx this) (inc idx))
-            (< idx (.Length fs)))))
-  (get_Current [this] (.invoke (aget fs idx)))))
-
-
-  (ppexpand   (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0)))
-
-
-(use 'hard.core 'pdfn.core )
-(require '[clojure.pprint :as pprint] )
-
-(ppexpand   (tween {:position (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0))
-(ppexpand   (tween {:position2 (V* (Vector3. (?f)(?f)(?f)) 10)} o 4.0))
-
-(ppexpand (tween {:rotation (?rotation)} (clone! :ball) 5.0))

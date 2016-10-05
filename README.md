@@ -30,8 +30,9 @@ A fast tween library for arcadia/Unity
 ```clj
 (timeline* :loop
   (wait 0.5)
-  (tween {:local {:scale (->v3 (rand))}} 
-   (the ball) 0.9))
+  (tween {:local {
+    :position (v3 0 2 0)
+    :scale (v3 (rand))}} (object/named "ball") 0.9))
 ```
 
 ### wait
@@ -45,11 +46,12 @@ returns fn that returns true for the duration after it's first invokation
 
 ## `deftag` macro
 
-Registers a type for tweening.  An internal `Pair-Foo` class will be defined.
+Registers a type for tweening.  `:pair` should be a type with mutable `a` and `b` fields. `:lerp` fn takes two values and a System.Single ratio, which will be between `0` and `1`. 
 
 ```clj
 (deftag       UnityEngine.Vector3 
-  {:lerp      UnityEngine.Vector3/Lerp           
+  {:pair      Vector3Pair
+   :lerp      UnityEngine.Vector3/Lerp           
    :identity  (UnityEngine.Vector3.)})
 ```
 
@@ -92,7 +94,7 @@ Expands into a fn that returns true for the duration after it's first invokation
 *  `arg-1`  map of target values
 *  `arg-2`  object reference
 *  `arg-3`  duration
-*  `& more` compile into opt map
+*  `& more` compiles into opt map, naked easing keys compile to both `:in` and `:out` opts
 
 
 

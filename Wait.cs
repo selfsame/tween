@@ -20,6 +20,10 @@ public class Wait{
 
 	public float ratio{
 		get{
-		  return (end - UnityEngine.Time.time) /  duration;}}
-
+			if (!active){
+				return 0f;
+			}
+		  	return 1f - (end - UnityEngine.Time.time) /  duration;
+		}
+	}
 }

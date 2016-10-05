@@ -1,8 +1,6 @@
 using UnityEngine;
 using clojure.lang;
-using System;
 using System.Collections;
-using System.Collections.Generic;
 
 public class TimeLine : IEnumerator{
   public object[] fns;
@@ -15,9 +13,6 @@ public class TimeLine : IEnumerator{
       return false;}
     else if (!(predicate == null) && RT.booleanCast(predicate.invoke())){
       return true;}
-//    else if (idx > -1 && fns[idx] is IEnumerator){
-//      Debug.Log(fns[idx]);
-//      return false;}
     else if (idx + 1  < fns.Length) {
       idx++;
       try{
@@ -30,12 +25,9 @@ public class TimeLine : IEnumerator{
   public void Reset(){
     idx = -1;
     predicate = null;}
-//  object IEnumerator.Current{
-//    get{
-//      return Current;}}
   public object Current{
     get{
       try{
         return fns[idx];}
       catch (System.IndexOutOfRangeException) {
-        throw new InvalidOperationException();}}}}
+        throw new System.InvalidOperationException();}}}}
