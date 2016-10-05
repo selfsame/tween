@@ -10,7 +10,7 @@
     Vector4Pair Vector3Pair Vector2Pair ColorPair)
   (:require [clojure.walk :as walk]))
 
-(defonce THIS (gensym 'this))
+(defonce THIS 'THYSELF)
 (defonce REGISTRY (atom {}))
 (def panic false)
 
@@ -332,3 +332,6 @@
   ['ColorPair       'UnityEngine.Color]]))
 
 '[tween.core]
+
+'arcadia.core
+'arcadia.core
