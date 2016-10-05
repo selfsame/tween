@@ -1,7 +1,8 @@
 # tween.core
-A fast tween library for arcadia/Unity
+Tween library for [arcadia-unity](github.com/arcadia-unity/Arcadia)
 
-![tween core](https://cloud.githubusercontent.com/assets/2467644/16961321/fa3d3c82-4dba-11e6-8c8c-4a81006844f1.gif)
+![tween](https://cloud.githubusercontent.com/assets/2467644/19105679/52ed9bbe-8ab1-11e6-9a4c-3087e5f43e09.gif)
+
 
 ## timelines
 
@@ -41,6 +42,18 @@ A fast tween library for arcadia/Unity
 
 returns fn that returns true for the duration after it's first invokation
 
+### timeline control macros: `AND`, `OR`, and `NOT`
+
+returns a fn returning the boolean result of invoking forms.  Uses let bindings for each form to "evaporate" any closures. Pretty experimental, but does allows temporal control flow.
+
+```clj
+(timeline* 
+  (AND (wait 2.0) 
+       (OR (AND (NOT (wait 1.0))
+                (tween {:position (v3 0 10 0)} foo 5.0))
+           (OR (wait 3) 
+              #(log "cancel")))))
+```
 
 ## tweens
 
