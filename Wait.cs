@@ -13,11 +13,9 @@ public class Wait{
 			active = true;
 			end = UnityEngine.Time.time + duration;}
 		if (end < UnityEngine.Time.time ){
-			active = false;
 			return false;}
 		return true;
 	}
-
 	public float ratio{
 		get{
 			if (!active){

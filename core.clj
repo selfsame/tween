@@ -4,13 +4,13 @@
      GameObject Color Vector4 Vector3 Vector2 Quaternion]
     [System Object]
     [System.Collections IEnumerator]
-    Wait MonoObj
+    Wait MonoObj TimeLine
 
     ObjectPair SinglePair DoublePair Int16Pair Int32Pair Int64Pair QuaternionPair 
     Vector4Pair Vector3Pair Vector2Pair ColorPair)
   (:require [clojure.walk :as walk]))
 
-(defonce THIS (gensym 'this))
+(defonce THIS 'THYSELF)
 (defonce REGISTRY (atom {}))
 (def panic false)
 
@@ -58,21 +58,28 @@
 (defmacro AND [& more]
   (let [syms (take (count more) (repeatedly gensym))]
    `(~'let [~@(mapcat vector syms more)] 
-      (~'fn [] (~'and ~@(map list syms))))))
+      (~'fn [] (~'and ~@(map (partial list '.invoke) syms))))))
+
+(defmacro ANY [& more]
+  (let [syms (take (count more) (repeatedly gensym))]
+   `(~'let [~@(mapcat vector syms more)] 
+      (~'fn [] (~'some ~'(fn [v] (if v true))  ~(mapv (partial list '.invoke) syms))))))
 
 (defmacro OR [& more]
   (let [syms (take (count more) (repeatedly gensym))]
    `(~'let [~@(mapcat vector syms more)] 
-      (~'fn [] (~'or ~@(map list syms))))))
+      (~'fn [] (~'or ~@(map (partial list '.invoke) syms))))))
 
 (defmacro NOT [f]
   (let [sym (gensym)]
    `(~'let [~sym ~f] 
-      (~'fn [] (~'not (~sym))))))
-
+      (~'fn [] (~'not (~'.invoke ~sym))))))
 
 
 (defn ^Wait wait [n] (Wait. n))
+
+(defmacro WAIT [n] `(~'WaitForSeconds. ~n))
+
 
 
 (deftype TimeLineCursor [
@@ -135,6 +142,13 @@
       ~@(map-indexed #(list 'aset ar %1 (list 'fn [] %2)) fns)
       (array-timeline ~opts ~ar))))
 
+(defmacro timeline$ [& fns]
+  (let [[[loop?] fns] ((juxt take-while drop-while) #{:loop} fns)
+        tl (gensym)]
+    `(~'let [~tl (~'TimeLine. (~'make-array System.Object ~(count fns)))]
+       ~@(map-indexed #(list 'aset (list '.fns tl) %1 %2) fns) 
+        (if ~loop? (set! (.loop ~tl) true)) 
+        (~'.StartCoroutine (mono-obj) ~tl))))
 
 
 (defmacro pow2 [a] `(Mathf/Pow ~a 2))
@@ -177,7 +191,7 @@
            (#{:pow2 :pow3 :pow4 :pow5} %) {:in % :out %}) m)))
 
 
-(defn ^System.Boolean expired? [^Wait w] (if (.invoke w) TRUE FALSE))
+(defn ^System.Boolean expired? [^Wait w] (if (.invoke w) TRUE (do (set! (.active w) TRUE) FALSE)))
 
 (deftype ^:once TweenCursor [
   ^:volatile-mutable ^boolean          initiated
@@ -307,6 +321,12 @@
   {:base (.GetComponent this UnityEngine.Light)
    :get (.range this)
    :tag System.Single})
+
+(deftween [:velocity] [this]
+  {:get  (.velocity this)
+   :base (.GetComponent this UnityEngine.Rigidbody)
+   :base-tag UnityEngine.Rigidbody
+   :tag UnityEngine.Vector3})
 
 (comment 
 (defn spit-pair [n t] 

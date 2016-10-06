@@ -4,7 +4,7 @@ Tween library for [arcadia-unity](github.com/arcadia-unity/Arcadia)
 ![tween](https://cloud.githubusercontent.com/assets/2467644/19105679/52ed9bbe-8ab1-11e6-9a4c-3087e5f43e09.gif)
 
 
-## timelines
+# timelines
 
 
 `timeline` starts a coroutine that iterates a `seq?` collection. Items are invoked every frame and lazily iterate when falsey. 
@@ -26,7 +26,7 @@ Tween library for [arcadia-unity](github.com/arcadia-unity/Arcadia)
     (fn [] #(log 'tick)])))
 ```
 
-`timeline*` macro wraps forms with `(fn [])`, and uses an Array for performance. Keywords are removed for options. `:loop` cycles the iterator.
+`timeline*` macro wraps forms with `(fn [])`, and uses an Array for performance. `:loop` as first arg cycles the iterator.
 
 ```clj
 (timeline* :loop
@@ -36,26 +36,40 @@ Tween library for [arcadia-unity](github.com/arcadia-unity/Arcadia)
     :scale (v3 (rand))}} (object/named "ball") 0.9))
 ```
 
+`timeline$` macro has similar usage as `timeline*`, does not expect fn closures on forms, and returns a coroutine. Unity supports nesting coroutines making and these performant but not as composable.
+
+```clj
+(timeline$ 
+  (WAIT 1) 
+  (timeline$ 
+    #(log "foo"))
+  #(log "bar"))
+```
+
+
 ### wait
 
 `(wait 0.5)`
 
 returns fn that returns true for the duration after it's first invokation
 
-### timeline control macros: `AND`, `OR`, and `NOT`
 
-returns a fn returning the boolean result of invoking forms.  Uses let bindings for each form to "evaporate" any closures. Pretty experimental, but does allows temporal control flow.
+
+### timeline control macros: `AND`, `OR`, `NOT`, `ANY`
+
+conrol logic fn constructors, returning the boolean result of invoking their forms.  Uses let bindings for each form to "evaporate" any closures. Pretty experimental, but does allows temporal control flow.  Uses lazy evaluation as in core, since tweens and waits start when first invoked, using `(OR a b c)` has interesting temporal behaviour.
 
 ```clj
 (timeline* 
-  (AND (wait 2.0) 
+  (AND (wait 4.0) 
        (OR (AND (NOT (wait 1.0))
                 (tween {:position (v3 0 10 0)} foo 5.0))
            (OR (wait 3) 
               #(log "cancel")))))
 ```
 
-## tweens
+
+# tweens
 
 ## `deftag` macro
 
