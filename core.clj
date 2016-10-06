@@ -253,7 +253,9 @@
 (deftag System.Object          {:pair ObjectPair     :lerp (fn [a b _] b)           :identity (System.Object.)})
 (deftag System.Single          {:pair SinglePair     :lerp Mathf/Lerp               :identity (float 0.0)})
 (deftag System.Double          {:pair DoublePair     :lerp Mathf/Lerp               :identity (double 0.0)})
+(deftag UnityEngine.Vector2    {:pair Vector2Pair    :lerp UnityEngine.Vector2/Lerp :identity (UnityEngine.Vector2.)})
 (deftag UnityEngine.Vector3    {:pair Vector3Pair    :lerp UnityEngine.Vector3/Lerp :identity (UnityEngine.Vector3.)})
+(deftag UnityEngine.Vector4    {:pair Vector4Pair    :lerp UnityEngine.Vector4/Lerp :identity (UnityEngine.Vector4.)})
 (deftag UnityEngine.Color      {:pair ColorPair      :lerp UnityEngine.Color/Lerp   :identity (UnityEngine.Color.)})
 (deftag UnityEngine.Quaternion {:pair QuaternionPair :lerp Quaternion/LerpUnclamped :identity (Quaternion.)})
 
