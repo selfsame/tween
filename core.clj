@@ -1,7 +1,7 @@
 (ns tween.core
   (:import 
     [UnityEngine Application MonoBehaviour WaitForSeconds Time Mathf
-     GameObject Color Vector4 Vector3 Vector2 Quaternion]
+     GameObject Color Vector4 Vector3 Vector2 Quaternion Debug]
     [System Object]
     [System.Collections IEnumerator]
     Wait MonoObj TimeLine
@@ -13,6 +13,8 @@
 (defonce THIS 'THYSELF)
 (defonce REGISTRY (atom {}))
 (def panic false)
+
+(def abort! #(throw (UnityEngine.MissingReferenceException. "tween.core/abort!")))
 
 (def ^System.Single -single (float 0.0))
 (def ^System.Int32  -short  (int 0))
@@ -81,7 +83,6 @@
 (defmacro WAIT [n] `(~'WaitForSeconds. ~n))
 
 
-
 (deftype TimeLineCursor [
   ^:volatile-mutable ^System.Int32    i 
   ^:volatile-mutable ^boolean         v])
@@ -96,14 +97,13 @@
       (.StartCoroutine coro-root
         (reify IEnumerator
           (MoveNext [this]
-            (when-not panic
-              (try 
-                (set! (.v cursor) (.invoke @current))
-                (if (.v cursor) TRUE
-                  (if (do (vreset! current (first @fns) )
-                          (vswap! fns rest) @current)
-                    TRUE FALSE))
-                (catch Exception e false))))
+            (try 
+              (set! (.v cursor) (.invoke @current))
+              (if (.v cursor) TRUE
+                (if (do (vreset! current (first @fns) )
+                        (vswap! fns rest) @current)
+                  TRUE FALSE))
+              (catch UnityEngine.MissingReferenceException e false)))
           (get_Current [this] (.v cursor))))]
       (fn [] (if @current routine false)))))
 
@@ -131,7 +131,7 @@
                     (do (set! (.i cursor) (inc (.i cursor)))
                         (vreset! current ((aget fns (.i cursor))))
                         @current)))
-              (catch Exception e FALSE)))
+              (catch UnityEngine.MissingReferenceException e)))
           (get_Current [this] (.v cursor))))]
       (fn [] (if (.v cursor) routine FALSE)))))
 
@@ -323,12 +323,6 @@
   {:base (.GetComponent this UnityEngine.Light)
    :get (.range this)
    :tag System.Single})
-
-(deftween [:velocity] [this]
-  {:get  (.velocity this)
-   :base (.GetComponent this UnityEngine.Rigidbody)
-   :base-tag UnityEngine.Rigidbody
-   :tag UnityEngine.Vector3})
 
 (comment 
 (defn spit-pair [n t] 
