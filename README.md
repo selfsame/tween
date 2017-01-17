@@ -53,7 +53,16 @@ Tween library for [arcadia-unity](github.com/arcadia-unity/Arcadia)
 
 returns fn that returns true for the duration after it's first invokation
 
+### abort!
 
+Throws a `UnityEngine.MissingReferenceException`, silently stopping the timeline.
+
+```clj
+(timeline [
+  #(log "foo")
+  #(abort!)
+  #(log "bar")])
+```
 
 ### timeline control macros: `AND`, `OR`, `NOT`, `ANY`
 
