@@ -6,6 +6,7 @@ Tween library for [arcadia-unity](github.com/arcadia-unity/Arcadia)
 
 # timelines
 
+A version of [https://github.com/nasser](nasser)'s timeline concept.
 
 `timeline` starts a coroutine that iterates a `seq?` collection. Items are invoked every frame and lazily iterate when falsey. 
 
@@ -36,7 +37,7 @@ Tween library for [arcadia-unity](github.com/arcadia-unity/Arcadia)
     :scale (v3 (rand))}} (object/named "ball") 0.9))
 ```
 
-`timeline$` macro has similar usage as `timeline*`, does not expect fn closures on forms, and returns a coroutine. Unity supports nesting coroutines making and these performant but not as composable.
+`timeline$` macro has similar usage as `timeline*`, wraps forms with `(fn [])`, and returns a coroutine. Unity supports nesting coroutines making and these performant but not as composable.
 
 ```clj
 (timeline$ 
