@@ -1,11 +1,10 @@
 (ns tween.core
   (:import 
-    [UnityEngine Application MonoBehaviour WaitForSeconds Time Mathf
+    [UnityEngine Mathf Application MonoBehaviour WaitForSeconds Time Mathf
      GameObject Color Vector4 Vector3 Vector2 Quaternion Debug]
     [System Object]
     [System.Collections IEnumerator]
     Wait MonoObj TimeLine
-
     ObjectPair SinglePair DoublePair Int16Pair Int32Pair Int64Pair QuaternionPair 
     Vector4Pair Vector3Pair Vector2Pair ColorPair)
   (:require [clojure.walk :as walk]))
@@ -151,10 +150,10 @@
         (~'.StartCoroutine (mono-obj) ~tl))))
 
 
-(defmacro pow2 [a] `(Mathf/Pow ~a 2))
-(defmacro pow3 [a] `(Mathf/Pow ~a 3))
-(defmacro pow4 [a] `(Mathf/Pow ~a 4))
-(defmacro pow5 [a] `(Mathf/Pow ~a 5))
+(defmacro pow2 [a] `(UnityEngine.Mathf/Pow ~a 2))
+(defmacro pow3 [a] `(UnityEngine.Mathf/Pow ~a 3))
+(defmacro pow4 [a] `(UnityEngine.Mathf/Pow ~a 4))
+(defmacro pow5 [a] `(UnityEngine.Mathf/Pow ~a 5))
 
 (def quote-ease {
   :pow2   'pow2
@@ -251,13 +250,13 @@
 
 
 (deftag System.Object          {:pair ObjectPair     :lerp (fn [a b _] b)           :identity (System.Object.)})
-(deftag System.Single          {:pair SinglePair     :lerp Mathf/Lerp               :identity (float 0.0)})
-(deftag System.Double          {:pair DoublePair     :lerp Mathf/Lerp               :identity (double 0.0)})
+(deftag System.Single          {:pair SinglePair     :lerp UnityEngine.Mathf/Lerp   :identity (float 0.0)})
+(deftag System.Double          {:pair DoublePair     :lerp UnityEngine.Mathf/Lerp   :identity (double 0.0)})
 (deftag UnityEngine.Vector2    {:pair Vector2Pair    :lerp UnityEngine.Vector2/Lerp :identity (UnityEngine.Vector2.)})
 (deftag UnityEngine.Vector3    {:pair Vector3Pair    :lerp UnityEngine.Vector3/Lerp :identity (UnityEngine.Vector3.)})
 (deftag UnityEngine.Vector4    {:pair Vector4Pair    :lerp UnityEngine.Vector4/Lerp :identity (UnityEngine.Vector4.)})
 (deftag UnityEngine.Color      {:pair ColorPair      :lerp UnityEngine.Color/Lerp   :identity (UnityEngine.Color.)})
-(deftag UnityEngine.Quaternion {:pair QuaternionPair :lerp Quaternion/LerpUnclamped :identity (Quaternion.)})
+(deftag UnityEngine.Quaternion {:pair QuaternionPair :lerp UnityEngine.Quaternion/LerpUnclamped :identity (UnityEngine.Quaternion.)})
 
 
 (deftween [:position] [this]
